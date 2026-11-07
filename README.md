@@ -116,10 +116,10 @@ Linux is built on this Mac. The glibc floor is 2.27, which is Ubuntu 18.04. That
 The Mac install is Homebrew, from the tap at `/Users/developers/Projects/pesty-sh/homebrew-tap`:
 
 ```bash
-brew install --HEAD pesty-sh/tap/smashbin
+brew install pesty-sh/tap/smashbin
 ```
 
-`--HEAD` builds the current git commit. A numbered install (`brew install pesty-sh/tap/smashbin` with no `--HEAD`) waits until version 0.1.4 is tagged and the formula has that tarball's checksum. The formula is `Formula/smashbin.rb` in the tap. This repo does not keep a second copy.
+That installs the tagged `0.1.4` tarball. `--HEAD` still builds the latest commit on `master`. The formula is `Formula/smashbin.rb` in the tap. This repo does not keep a second copy.
 
 The Linux install is the apt repository at `/Users/developers/Projects/pesty-sh/apt`. From that directory, after `make deb`:
 
