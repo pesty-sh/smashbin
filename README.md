@@ -2,7 +2,7 @@
 
 smashbin makes one image smaller on your own machine. It does not open a network connection. The result is one binary. The Rust libraries it uses are compiled into that file. There is no C code, no header to compile, and no second library to install beside it.
 
-Version 0.1.2 strips metadata, resizes when you pass a width or a height, and checks that a PNG, JPG, or GIF can be a GitHub profile picture. A PHP module and a Tunes GUI are later. They are not in this version. The license is MIT. The text is `LICENSE`.
+Version 0.1.3 strips metadata, resizes when you pass a width or a height, and checks that a PNG, JPG, or GIF can be a GitHub profile picture. A PHP module and a Tunes GUI are later. They are not in this version. The license is MIT. The text is `LICENSE`.
 
 GitHub's rule, from their profile page:
 
@@ -73,6 +73,23 @@ Resize, then let a quality override replace that file:
 
 That writes `fixtures/github-avatar_strip_safe_width_500_quality_80.jpg`. The height stays 500 because the logo is square. `--height 250` with no width on a 1024 by 512 picture would write a width of 500.
 
+A `smasher.json` or `smasher.yaml` in the same directory as the image runs every job in that file, top to bottom. Each job writes its own file. `-c` points at a smasher file that lives somewhere else. The readers are part of this program. There is no JSON or YAML library to install.
+
+```json
+{
+  "jobs": [
+    { "width": 512 },
+    { "quality": 40 }
+  ]
+}
+```
+
+```yaml
+jobs:
+  - width: 512
+  - quality: 40
+```
+
 ## Build
 
 `make` compiles `target/release/smashbin` for this Mac. It does not copy the binary onto your PATH. The Intel build is stamped macOS 10.12 so a 2014 Mac can run it. `make` calls `~/.cargo/bin/cargo`, not the Homebrew cargo on PATH. Homebrew's compiler stamps macOS 13.0.
@@ -98,14 +115,14 @@ The Mac install is Homebrew, from the tap at `/Users/developers/Projects/pesty-s
 brew install --HEAD pesty-sh/tap/smashbin
 ```
 
-`--HEAD` builds the current git commit. A numbered install (`brew install pesty-sh/tap/smashbin` with no `--HEAD`) waits until version 0.1.2 is tagged on GitHub and the formula has that tarball's checksum. The formula is `Formula/smashbin.rb` in the tap. This repo does not keep a second copy.
+`--HEAD` builds the current git commit. A numbered install (`brew install pesty-sh/tap/smashbin` with no `--HEAD`) waits until version 0.1.3 is tagged on GitHub and the formula has that tarball's checksum. The formula is `Formula/smashbin.rb` in the tap. This repo does not keep a second copy.
 
 The Linux install is the apt repository at `/Users/developers/Projects/pesty-sh/apt`. From that directory, after `make deb`:
 
 ```bash
 python3 publish.py \
-  /Users/developers/Projects/pesty-sh/smashbin/dist/smashbin_0.1.2-1_amd64.deb \
-  /Users/developers/Projects/pesty-sh/smashbin/dist/smashbin_0.1.2-1_arm64.deb
+  /Users/developers/Projects/pesty-sh/smashbin/dist/smashbin_0.1.3-1_amd64.deb \
+  /Users/developers/Projects/pesty-sh/smashbin/dist/smashbin_0.1.3-1_arm64.deb
 ```
 
 That copies the packages into `pool/` and signs `dists/stable`. This repo does not keep a second copy of the apt repository.

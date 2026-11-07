@@ -13,10 +13,11 @@
 //! 9. [`write`] — the bytes go to a file or to stdout
 //!
 //! This file is the only place those steps are called, and they are called
-//! in that order. Version 0.1.2 does not change the format or pad to a square.
+//! in that order. Version 0.1.3 does not change the format or pad to a square.
 
 mod avatar;
 mod cli;
+mod config;
 mod error;
 mod lossless;
 mod lossy;

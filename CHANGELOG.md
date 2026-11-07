@@ -2,6 +2,12 @@
 
 smashbin is MIT licensed. The terms are in [LICENSE](LICENSE). Copyright (c) 2026 Stuart.
 
+## 0.1.3
+
+- A `smasher.json` or `smasher.yaml` next to the image runs each job from top to bottom.
+- `-c` / `--config` names a smasher file that is not next to the image.
+- The JSON and YAML readers are in the program. No parser crate was added.
+
 ## 0.1.2
 
 - `--width` / `-w` and `--height` / `-h` resize the picture. The file stays a PNG, JPEG, or GIF.

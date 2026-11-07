@@ -10,7 +10,7 @@ description: >-
 
 Single Rust package at the repo root. Binary and package name are `smashbin`.
 
-Version 0.1.2 strips metadata, resizes with `--width`/`-w` and `--height`/`-h`, losslessly shrinks PNG with the pure-Rust `png` crate, and checks the GitHub avatar rule: PNG, JPG, or GIF, under 1,000,000 bytes, edges smaller than 3000. One missing side keeps the aspect ratio. `--quality` and `--bytes` cannot be combined. They re-encode JPEG only, after the resize. This version does not change format or pad to a square. Do not add a C library, a `-sys` crate, or a header file. A PHP module and a Tunes GUI are later and are not part of this binary. The license is MIT.
+Version 0.1.3 strips metadata, resizes with `--width`/`-w` and `--height`/`-h`, losslessly shrinks PNG with the pure-Rust `png` crate, and checks the GitHub avatar rule: PNG, JPG, or GIF, under 1,000,000 bytes, edges smaller than 3000. One missing side keeps the aspect ratio. `--quality` and `--bytes` cannot be combined. They re-encode JPEG only, after the resize. A `smasher.json` or `smasher.yaml` next to the image runs each job top to bottom. `-c` / `--config` selects a different smasher file. Parse those files in the program. Do not add a JSON or YAML crate. This version does not change format or pad to a square. Do not add a C library, a `-sys` crate, or a header file. A PHP module and a Tunes GUI are later and are not part of this binary. The license is MIT.
 
 ## Builds
 

@@ -245,6 +245,58 @@ fn a_png_resize_stays_a_png() {
     assert_eq!(decoder.dimensions(), (2, 1));
 }
 
+#[test]
+fn a_smasher_json_beside_the_image_runs_every_job() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("logo.jpg");
+    std::fs::copy(logo(), &source).expect("copy");
+    std::fs::write(
+        dir.path().join("smasher.json"),
+        r#"{"jobs":[{"width":512},{"quality":40}]}"#,
+    )
+    .expect("config");
+    smashbin().arg(&source).assert().success();
+    assert!(dir.path().join("logo_strip_safe_width_512.jpg").is_file());
+    assert!(dir.path().join("logo_strip_safe_quality_40.jpg").is_file());
+    assert_eq!(std::fs::metadata(&source).expect("source").len(), 82_180);
+}
+
+#[test]
+fn config_flag_uses_that_file_and_not_the_one_beside_the_image() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("logo.jpg");
+    std::fs::copy(logo(), &source).expect("copy");
+    std::fs::write(
+        dir.path().join("smasher.json"),
+        r#"{"jobs":[{"width":10}]}"#,
+    )
+    .expect("sibling");
+    let chosen = dir.path().join("other.yaml");
+    std::fs::write(chosen, "jobs:\n  - quality: 30\n").expect("chosen");
+    smashbin()
+        .arg(&source)
+        .args(["-c"])
+        .arg(dir.path().join("other.yaml"))
+        .assert()
+        .success();
+    assert!(dir.path().join("logo_strip_safe_quality_30.jpg").is_file());
+    assert!(!dir.path().join("logo_strip_safe_width_10.jpg").exists());
+}
+
+#[test]
+fn flags_do_not_mix_with_a_smasher_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("logo.jpg");
+    std::fs::copy(logo(), &source).expect("copy");
+    std::fs::write(dir.path().join("smasher.yaml"), "jobs:\n  - strip: all\n").expect("config");
+    smashbin()
+        .arg(&source)
+        .args(["--width", "10"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("smasher file lists the jobs"));
+}
+
 fn write_jpeg(path: &std::path::Path, width: u32, height: u32) {
     let image = image::RgbImage::from_pixel(width, height, image::Rgb([10, 20, 30]));
     let mut bytes = Vec::new();
