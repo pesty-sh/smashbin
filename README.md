@@ -125,8 +125,8 @@ The Linux install is the apt repository at `/Users/developers/Projects/pesty-sh/
 
 ```bash
 python3 publish.py \
-  /Users/developers/Projects/pesty-sh/smashbin/dist/smashbin_0.1.4-1_amd64.deb \
-  /Users/developers/Projects/pesty-sh/smashbin/dist/smashbin_0.1.4-1_arm64.deb
+  /Users/developers/Projects/pesty-sh/rust/smashbin/dist/smashbin_0.1.4-1_amd64.deb \
+  /Users/developers/Projects/pesty-sh/rust/smashbin/dist/smashbin_0.1.4-1_arm64.deb
 ```
 
 That copies the packages into `pool/` and signs `dists/stable`. This repo does not keep a second copy of the apt repository.
