@@ -1,0 +1,5 @@
+[toolchain]
+channel = "stable"
+# rustup reads this when make calls ~/.cargo/bin/cargo. It does not change
+# the default build target. Homebrew's cargo ignores this file.
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-gnu", "x86_64-unknown-linux-gnu"]

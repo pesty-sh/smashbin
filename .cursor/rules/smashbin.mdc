@@ -1,0 +1,17 @@
+---
+description: smashbin packaging and privacy limits
+globs: "**/*"
+alwaysApply: true
+---
+
+# smashbin
+
+One Rust package named `smashbin` at the repo root.
+
+- `make` calls `~/.cargo/bin/cargo`. The Intel binary stays stamped macOS 10.12. `make` does not install. `make build-silicon` and `make build-windows` do not install. Windows uses `x86_64-pc-windows-gnu` and the MinGW linker.
+- `make deb` builds glibc 2.27 Linux binaries for amd64 and arm64 and a `.deb` for each. Docker is not used. Do not install those binaries over the Mac one.
+- The Homebrew formula is only in `/Users/developers/Projects/pesty-sh/homebrew-tap/Formula/smashbin.rb`. The apt repository is only in `/Users/developers/Projects/pesty-sh/apt`.
+- Version 0.1.2 sets width and height. One missing side keeps the aspect ratio. It does not change output format or pad to a square. `--quality` and `--bytes` cannot be combined. They re-encode JPEG only, after the resize. PNG shrinking uses the pure-Rust `png` crate. Do not add a C library or a `-sys` crate.
+- No telemetry, HTTP client, update checker, or image-content logging.
+
+Before build, install, or packaging work, read `.cursor/skills/smashbin/SKILL.md`.
