@@ -5,8 +5,7 @@
 //! A loose cap must not add damage. A resize that already fits is kept.
 //!
 //! PNG and GIF have no quality knob. Asking for one is an error. A byte cap
-//! they already meet is fine. A byte cap they miss is exit 2, because this
-//! version does not change format.
+//! they already meet is fine. A byte cap they miss stays the same format.
 
 use image::RgbImage;
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
@@ -22,6 +21,8 @@ pub enum How {
     Lossless,
     /// The picture was resized. No quality override was applied.
     Resize,
+    /// `--ext` wrote a different container.
+    Convert,
     /// One JPEG encode at a chosen quality.
     Quality(u8),
     /// Several JPEG encodes. `fit` is false when even quality 1 is too big.
@@ -35,6 +36,7 @@ impl How {
         match self {
             Self::Lossless => "lossless".to_owned(),
             Self::Resize => "resize".to_owned(),
+            Self::Convert => "convert".to_owned(),
             Self::Quality(quality) => format!("quality={quality}"),
             Self::Bytes { quality, fit } => {
                 if fit {
@@ -162,7 +164,7 @@ pub(crate) fn encode_rgb(rgb: &RgbImage, quality: u8) -> Result<Vec<u8>, SmashEr
 /// Eight or so encodes. The decoded pixels are reused, so only the encode
 /// repeats. Quality is not perfectly monotonic, but it is close enough for
 /// a byte ceiling.
-fn search(rgb: &RgbImage, cap: usize) -> Result<(Vec<u8>, u8, bool), SmashError> {
+pub(crate) fn search(rgb: &RgbImage, cap: usize) -> Result<(Vec<u8>, u8, bool), SmashError> {
     let mut low = 1u8;
     let mut high = 100u8;
     let mut best: Option<(Vec<u8>, u8)> = None;

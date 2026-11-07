@@ -1,7 +1,9 @@
 //! A smasher file next to the image, or the file named by `-c`.
 //!
 //! `smasher.json` is read by the parser below. `smasher.yaml` and
-//! `smasher.yml` use the same job list in block form. Neither parser is a
+//! `smasher.yml` use the same job list in block form. When more than one of
+//! those files is next to the image, `smasher.json` wins, then `smasher.yaml`,
+//! then `smasher.yml`. Neither parser is a
 //! crate. The shapes are the ones this program writes jobs from, and nothing
 //! else.
 //!
@@ -14,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::Strip;
 use crate::error::SmashError;
+use crate::ext::Ext;
 
 /// One pass from a smasher file. Empty fields are left to the program default.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +27,10 @@ pub struct Spec {
     pub width: Option<u32>,
     /// New height, when the job sets it.
     pub height: Option<u32>,
+    /// Display density in pixels per inch, when the job sets it.
+    pub dpi: Option<u16>,
+    /// Output container, when the job sets it.
+    pub ext: Option<Ext>,
     /// JPEG quality, when the job sets it.
     pub quality: Option<u8>,
     /// Byte cap as typed, when the job sets it.
@@ -54,29 +61,17 @@ pub fn load(path: &Path) -> Result<Vec<Spec>, SmashError> {
     specs(value).map_err(|error| SmashError::message(format!("{}: {error}", path.display())))
 }
 
-/// `smasher.json`, then `smasher.yaml`, then `smasher.yml`, in the image's directory.
-///
-/// # Errors
-///
-/// More than one of those files is present.
-pub fn beside(image: &Path) -> Result<Option<PathBuf>, SmashError> {
+/// The first file that exists wins: `smasher.json`, then `smasher.yaml`, then `smasher.yml`.
+#[must_use]
+pub fn beside(image: &Path) -> Option<PathBuf> {
     let dir = image
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let found: Vec<PathBuf> = ["smasher.json", "smasher.yaml", "smasher.yml"]
+    ["smasher.json", "smasher.yaml", "smasher.yml"]
         .into_iter()
         .map(|name| dir.join(name))
-        .filter(|path| path.is_file())
-        .collect();
-    match found.len() {
-        0 => Ok(None),
-        1 => Ok(found.into_iter().next()),
-        _ => Err(SmashError::message(format!(
-            "found more than one smasher file next to {}. Pass -c to pick one.",
-            image.display()
-        ))),
-    }
+        .find(|path| path.is_file())
 }
 
 #[derive(Debug, PartialEq)]
@@ -122,6 +117,8 @@ fn one_job(index: usize, value: Value) -> Result<Spec, String> {
         strip: None,
         width: None,
         height: None,
+        dpi: None,
+        ext: None,
         quality: None,
         bytes: None,
     };
@@ -138,6 +135,12 @@ fn one_job(index: usize, value: Value) -> Result<Spec, String> {
             "strip" => spec.strip = Some(strip_value(index, value)?),
             "width" => spec.width = Some(whole(index, "width", value, 1, 65_535)?),
             "height" => spec.height = Some(whole(index, "height", value, 1, 65_535)?),
+            "dpi" => {
+                spec.dpi = Some(u16::try_from(whole(index, "dpi", value, 1, 65_535)?).map_err(
+                    |_| format!("job {} dpi needs a number from 1 to 65535", index + 1),
+                )?);
+            }
+            "ext" => spec.ext = Some(ext_value(index, value)?),
             "quality" => {
                 spec.quality = Some(
                     u8::try_from(whole(index, "quality", value, 1, 100)?).map_err(|_| {
@@ -158,6 +161,13 @@ fn one_job(index: usize, value: Value) -> Result<Spec, String> {
         ));
     }
     Ok(spec)
+}
+
+fn ext_value(index: usize, value: Value) -> Result<Ext, String> {
+    let Value::String(text) = value else {
+        return Err(format!("job {} ext is {}", index + 1, Ext::LIST));
+    };
+    Ext::parse(&text).ok_or_else(|| format!("job {} ext is {}", index + 1, Ext::LIST))
 }
 
 fn strip_value(index: usize, value: Value) -> Result<Strip, String> {
@@ -619,6 +629,17 @@ mod tests {
         assert_eq!(json[1].strip, Some(Strip::All));
         assert_eq!(json[1].quality, Some(40));
         assert_eq!(json[2].bytes.as_deref(), Some("40kb"));
+    }
+
+    #[test]
+    fn json_wins_when_yaml_is_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("logo.jpg");
+        std::fs::write(dir.path().join("smasher.yaml"), "jobs:\n  - width: 1\n").unwrap();
+        std::fs::write(dir.path().join("smasher.yml"), "jobs:\n  - width: 3\n").unwrap();
+        std::fs::write(dir.path().join("smasher.json"), r#"{"jobs":[{"width":2}]}"#).unwrap();
+        let chosen = super::beside(&image).unwrap();
+        assert_eq!(chosen, dir.path().join("smasher.json"));
     }
 
     #[test]

@@ -5,32 +5,36 @@
 //! No file means "read the image from stdin".
 
 use std::ffi::OsString;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, ValueEnum};
 
 use crate::config::Spec;
 use crate::error::SmashError;
+use crate::ext::Ext;
 
 /// The whole command line.
 #[derive(Debug, Parser)]
 #[command(
     name = "smashbin",
     version,
-    about = "Strip metadata and shrink a PNG, JPG, or GIF for a GitHub avatar.",
+    about = "Strip metadata and shrink a PNG, JPG, or GIF.",
     disable_help_flag = true,
     after_help = "\
 Steps, in order:
   1. Remove private metadata. The color profile stays unless you pass --strip all.
   2. Resize when --width or --height is set. A missing side keeps the aspect ratio.
+     --dpi sets the stored pixels per inch. The pixel grid does not change.
   3. Shrink that file without a second lossy pass.
   4. If you passed --quality or --bytes, that replaces step 3 with a new JPEG.
-  5. Check the GitHub avatar rule: PNG, JPG, or GIF, under 1 MB, smaller than 3000x3000.
+  5. --ext writes a different container. WebP is lossless. A GIF keeps its first frame.
 
 A smasher.json or smasher.yaml next to the image runs each job from top to bottom.
 -c names a smasher file that lives somewhere else.
 
-This version does not change the format or pad a picture into a square."
+--ext can write jpg, png, gif, webp, bmp, tif, tga, ico, qoi, ppm, hdr, or ff.
+This version does not pad a picture into a square."
 )]
 pub struct Args {
     /// Show the flags. `-h` is height.
@@ -50,6 +54,14 @@ pub struct Args {
     #[arg(short = 'h', long, value_name = "PX", value_parser = clap::value_parser!(u32).range(1..=65535))]
     height: Option<u32>,
 
+    /// Display density in pixels per inch, from 1 to 65535. The pixel grid stays the same.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..=65535))]
+    dpi: Option<u16>,
+
+    /// Write this container. `jpg`, `png`, `gif`, `webp`, `bmp`, `tif`, `tga`, `ico`, `qoi`, `ppm`, `hdr`, or `ff`.
+    #[arg(short = 'e', long, value_name = "EXT", value_parser = parse_ext_arg)]
+    ext: Option<Ext>,
+
     /// Make a new JPEG at this quality, from 1 to 100. Cannot be combined with --bytes.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=100), conflicts_with = "bytes")]
     quality: Option<u8>,
@@ -62,7 +74,7 @@ pub struct Args {
     #[arg(short = 'c', long, value_name = "FILE")]
     config: Option<PathBuf>,
 
-    /// Write here. A directory keeps the generated name inside it.
+    /// Write here. A directory keeps the generated name inside it. Missing folders are created.
     #[arg(short, long, conflicts_with = "stdout")]
     out: Option<PathBuf>,
 
@@ -115,6 +127,10 @@ pub struct Job {
     pub width: Option<u32>,
     /// Set only when the user typed `--height`.
     pub height: Option<u32>,
+    /// Set only when the user typed `--dpi`.
+    pub dpi: Option<u16>,
+    /// Set only when the user typed `--ext`.
+    pub ext: Option<Ext>,
 }
 
 #[cfg(test)]
@@ -143,7 +159,7 @@ pub fn parse_args() -> Args {
     Args::parse()
 }
 
-const CONFIG_FLAGS: &str = "the smasher file lists the jobs. Leave off --strip, --width, --height, --quality, and --bytes.";
+const CONFIG_FLAGS: &str = "the smasher file lists the jobs. Leave off --strip, --width, --height, --dpi, --ext, --quality, and --bytes.";
 
 /// Turn the command line into one job per file.
 ///
@@ -183,10 +199,8 @@ pub fn jobs(args: &Args) -> Result<Vec<Job>, SmashError> {
         ));
     }
     if let Some(path) = &args.out {
-        if args.files.len() > 1 && !path.is_dir() {
-            return Err(SmashError::message(
-                "--out must be a directory when you pass more than one file.",
-            ));
+        if args.files.len() > 1 {
+            prepare_out_dir(path)?;
         }
     }
 
@@ -198,10 +212,26 @@ pub fn jobs(args: &Args) -> Result<Vec<Job>, SmashError> {
     Ok(jobs)
 }
 
+/// Make `path` a directory. A path that is already a file is an error.
+fn prepare_out_dir(path: &Path) -> Result<(), SmashError> {
+    if path.is_dir() {
+        return Ok(());
+    }
+    if path.exists() {
+        return Err(SmashError::message(
+            "--out must be a directory when you pass more than one file or job.",
+        ));
+    }
+    fs::create_dir_all(path)?;
+    Ok(())
+}
+
 fn cli_sets_a_job(args: &Args) -> bool {
     args.strip != Strip::Safe
         || args.width.is_some()
         || args.height.is_some()
+        || args.dpi.is_some()
+        || args.ext.is_some()
         || args.quality.is_some()
         || args.bytes.is_some()
 }
@@ -211,6 +241,8 @@ fn spec_from_cli(args: &Args) -> Spec {
         strip: Some(args.strip),
         width: args.width,
         height: args.height,
+        dpi: args.dpi,
+        ext: args.ext,
         quality: args.quality,
         bytes: args.bytes.clone(),
     }
@@ -224,7 +256,7 @@ fn specs_for(
     if let Some(specs) = explicit {
         return Ok(specs.clone());
     }
-    if let Some(path) = crate::config::beside(file)? {
+    if let Some(path) = crate::config::beside(file) {
         if cli_sets_a_job(args) {
             return Err(SmashError::message(CONFIG_FLAGS));
         }
@@ -236,8 +268,8 @@ fn specs_for(
 fn stdin_jobs(args: &Args, specs: &[Spec]) -> Result<Vec<Job>, SmashError> {
     if specs.len() > 1 {
         match &args.out {
-            Some(path) if path.is_dir() => {}
-            _ => {
+            Some(path) => prepare_out_dir(path)?,
+            None => {
                 return Err(SmashError::message(
                     "--out must be a directory when the smasher file has more than one job.",
                 ));
@@ -262,6 +294,8 @@ fn stdin_jobs(args: &Args, specs: &[Spec]) -> Result<Vec<Job>, SmashError> {
             byte_cap: parsed.byte_cap,
             width: parsed.width,
             height: parsed.height,
+            dpi: parsed.dpi,
+            ext: parsed.ext,
         });
     }
     Ok(jobs)
@@ -285,11 +319,7 @@ fn push_file_jobs(
     }
     if specs.len() > 1 {
         if let Some(path) = &args.out {
-            if !path.is_dir() {
-                return Err(SmashError::message(
-                    "--out must be a directory when the smasher file has more than one job.",
-                ));
-            }
+            prepare_out_dir(path)?;
         }
     }
     for spec in specs {
@@ -316,6 +346,8 @@ fn push_file_jobs(
             byte_cap: parsed.byte_cap,
             width: parsed.width,
             height: parsed.height,
+            dpi: parsed.dpi,
+            ext: parsed.ext,
         });
     }
     Ok(())
@@ -327,6 +359,8 @@ struct ParsedJob {
     byte_cap: Option<u64>,
     width: Option<u32>,
     height: Option<u32>,
+    dpi: Option<u16>,
+    ext: Option<Ext>,
     bytes: Option<String>,
 }
 
@@ -343,6 +377,8 @@ fn parsed_job(spec: &Spec) -> Result<ParsedJob, SmashError> {
         byte_cap,
         width: spec.width,
         height: spec.height,
+        dpi: spec.dpi,
+        ext: spec.ext,
         bytes: spec.bytes.clone(),
     })
 }
@@ -350,11 +386,10 @@ fn parsed_job(spec: &Spec) -> Result<ParsedJob, SmashError> {
 /// `logo.jpg` with no extra flags becomes `logo_strip_safe.jpg`.
 ///
 /// The original stem stays first. Then `_`, then the input vars in this
-/// fixed order: `strip`, `width`, `height`, `quality`, `bytes`. A var that
+/// fixed order: `strip`, `width`, `height`, `dpi`, `quality`, `bytes`. A var that
 /// was not set is left out. `--quality` and `--bytes` cannot both be set.
 fn output_name(path: &Path, job: &ParsedJob) -> OsString {
     let stem = path.file_stem().unwrap_or(std::ffi::OsStr::new("image"));
-    let extension = path.extension().unwrap_or(std::ffi::OsStr::new("img"));
     let mut name = stem.to_os_string();
     name.push("_strip_");
     name.push(job.strip.as_str());
@@ -366,6 +401,10 @@ fn output_name(path: &Path, job: &ParsedJob) -> OsString {
         name.push("_height_");
         name.push(height.to_string());
     }
+    if let Some(dpi) = job.dpi {
+        name.push("_dpi_");
+        name.push(dpi.to_string());
+    }
     if let Some(quality) = job.quality {
         name.push("_quality_");
         name.push(quality.to_string());
@@ -375,8 +414,16 @@ fn output_name(path: &Path, job: &ParsedJob) -> OsString {
         name.push(byte_token(bytes));
     }
     name.push(".");
-    name.push(extension);
+    if let Some(ext) = job.ext {
+        name.push(ext.extension());
+    } else {
+        name.push(path.extension().unwrap_or(std::ffi::OsStr::new("img")));
+    }
     name
+}
+
+fn parse_ext_arg(text: &str) -> Result<Ext, String> {
+    Ext::parse(text).ok_or_else(|| format!("--ext is {}. `{text}` is none of those.", Ext::LIST))
 }
 
 /// `40KB` becomes `40kb`, so the file name matches the typed size.
@@ -390,8 +437,7 @@ fn byte_token(text: &str) -> String {
 
 /// `800000`, `800kb`, `800kib`, `1mb`, `1mib`.
 ///
-/// `kb` is 1000. `kib` is 1024. GitHub's "1 MB" is the decimal one, so
-/// `--bytes 1mb` means 1,000,000 bytes.
+/// `kb` is 1000. `kib` is 1024. `--bytes 1mb` means 1,000,000 bytes.
 fn parse_bytes(text: &str) -> Result<u64, String> {
     let lower = text.trim().to_ascii_lowercase();
     let (digits, multiplier) = if let Some(rest) = lower.strip_suffix("kib") {
@@ -486,6 +532,20 @@ mod tests {
             Some(Path::new(
                 "logo_strip_all_width_20_height_10_quality_80.jpg"
             ))
+        );
+
+        let density = Args::try_parse_from(["smashbin", "--dpi", "144", "logo.jpg"]).unwrap();
+        let jobs = super::jobs(&density).unwrap();
+        assert_eq!(
+            jobs[0].dest_path(),
+            Some(Path::new("logo_strip_safe_dpi_144.jpg"))
+        );
+
+        let ext = Args::try_parse_from(["smashbin", "--ext", "webp", "logo.jpg"]).unwrap();
+        let jobs = super::jobs(&ext).unwrap();
+        assert_eq!(
+            jobs[0].dest_path(),
+            Some(Path::new("logo_strip_safe.webp"))
         );
     }
 }

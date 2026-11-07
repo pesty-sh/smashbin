@@ -1,15 +1,15 @@
 [package]
 name = "smashbin"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 rust-version = "1.88"
-description = "Offline image smasher. Strips metadata, resizes, and checks the GitHub avatar limit."
+description = "Offline image smasher. Strips metadata and resizes."
 authors = ["pesty-sh <pesty@pesty.sh>"]
 license = "MIT"
 repository = "https://github.com/pesty-sh/smashbin"
 homepage = "https://pesty.sh"
 readme = "README.md"
-keywords = ["jpeg", "png", "offline", "privacy", "avatar"]
+keywords = ["jpeg", "png", "offline", "privacy", "image"]
 categories = ["command-line-utilities", "multimedia::images"]
 
 # These are compiled into the one binary. None of them is C, and none of
@@ -18,7 +18,9 @@ categories = ["command-line-utilities", "multimedia::images"]
 #   img-parts     lifts metadata out of a JPEG, PNG, or GIF container
 #   png           recompresses a PNG. Pure Rust. Pixels stay the same.
 #   image         reads pixels and resizes them. JPEG and GIF go through it.
-#                 `--quality` and `--bytes` re-encode a JPEG from those pixels.
+#                 `--ext` also writes the pure-Rust formats listed below.
+#                 WebP is lossless. AVIF and lossy WebP need a C library, so
+#                 they are not enabled.
 #   jpeg-encoder  writes those pixels into a new JPEG
 [dependencies]
 clap = { version = "4.6.7", default-features = false, features = [
@@ -28,7 +30,20 @@ clap = { version = "4.6.7", default-features = false, features = [
     "error-context",
     "derive",
 ] }
-image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg"] }
+image = { version = "0.25.10", default-features = false, features = [
+    "bmp",
+    "ff",
+    "gif",
+    "hdr",
+    "ico",
+    "jpeg",
+    "png",
+    "pnm",
+    "qoi",
+    "tga",
+    "tiff",
+    "webp",
+] }
 img-parts = { version = "0.4.2", default-features = false }
 jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
 png = "0.18.1"

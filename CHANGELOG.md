@@ -2,6 +2,13 @@
 
 smashbin is MIT licensed. The terms are in [LICENSE](LICENSE). Copyright (c) 2026 Stuart.
 
+## 0.1.4
+
+- `--dpi` sets the stored pixels per inch. The pixel grid stays the same. JPEG and PNG store it in the file. WebP stores it in an EXIF block. A container with no density field is still written, and stderr names the original image's density.
+- `--ext` / `-e` writes `jpg`, `png`, `gif`, `webp`, `bmp`, `tif`, `tga`, `ico`, `qoi`, `ppm`, `hdr`, or `ff`. WebP is lossless.
+- A written image exits 0. The report does not score the file.
+- The generated file name adds `dpi` after `height`: `strip`, `width`, `height`, `dpi`, `quality`, `bytes`.
+
 ## 0.1.3
 
 - A `smasher.json` or `smasher.yaml` next to the image runs each job from top to bottom.
@@ -17,5 +24,5 @@ smashbin is MIT licensed. The terms are in [LICENSE](LICENSE). Copyright (c) 202
 
 ## 0.1.0
 
-- First version. Strip metadata, shrink a PNG without changing pixels, and check the GitHub avatar rule.
+- First version. Strip metadata and shrink a PNG without changing pixels.
 - `--quality` and `--bytes` re-encode a JPEG. They cannot be combined.

@@ -1,7 +1,6 @@
 //! Sentences for a failure, and nothing else.
 //!
-//! Exit 1 is one of these. Exit 2 is not an error. Exit 2 means the file was
-//! written, and GitHub would still refuse it. That decision lives in `avatar`.
+//! Exit 1 is one of these. A written image exits 0.
 
 use std::fmt;
 

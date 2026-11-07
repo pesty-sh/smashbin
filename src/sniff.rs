@@ -1,15 +1,15 @@
 //! Step 3. Name the format and read the width and height.
 //!
 //! The file extension is ignored. A `.jpg` that is really a PNG is a PNG.
-//! GitHub accepts only these three, so anything else stops here. This version
-//! does not convert one format into another.
+//! This version reads PNG, JPEG, and GIF. `--ext` can write a different
+//! container after this step.
 
 use img_parts::jpeg::Jpeg;
 use img_parts::Bytes;
 
 use crate::error::SmashError;
 
-/// The three formats a GitHub avatar can be.
+/// A format this version can read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     /// A PNG. Lossless shrink goes through the pure-Rust `png` crate.
@@ -74,7 +74,7 @@ pub fn sniff(bytes: &[u8]) -> Result<Picture, SmashError> {
         });
     }
     Err(SmashError::message(
-        "GitHub avatars are PNG, JPG, or GIF. This file is none of those. This version does not convert.",
+        "this version reads PNG, JPG, and GIF. This file is none of those.",
     ))
 }
 

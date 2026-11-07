@@ -4,31 +4,40 @@
 //!
 //! The default path is `name_strip_safe.jpg` next to the source. The source is
 //! left in place. `--replace` swaps it only when the new file is smaller.
+//! Missing folders in an output path are created.
 
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::avatar::{self, Gate};
 use crate::cli::{Dest, Job};
 use crate::error::SmashError;
+use crate::ext::Ext;
 use crate::lossy::How;
 use crate::read::Input;
 use crate::sniff::Picture;
+
+/// What stderr should say about `--dpi`.
+pub struct DensityLine {
+    /// Print `dpi=` on the summary line.
+    pub show_dpi: bool,
+    /// Extra sentence when the container has no density field.
+    pub note: Option<String>,
+}
 
 /// Write the image and the report.
 ///
 /// # Errors
 ///
-/// The destination directory is missing, or the disk is full.
+/// A folder in the output path could not be created, or the disk is full.
 pub fn emit(
     job: &Job,
     input: &Input,
     picture: &Picture,
     finished: &[u8],
     how: How,
-    gate: &Gate,
-) -> Result<avatar::Status, SmashError> {
+    density: &DensityLine,
+) -> Result<(), SmashError> {
     let (written, kept_original) = match &job.dest {
         Dest::Stdout => {
             let mut stdout = io::stdout().lock();
@@ -37,27 +46,26 @@ pub fn emit(
             (finished.len(), false)
         }
         Dest::Create(path) => {
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    fs::create_dir_all(parent)?;
+                }
+            }
             fs::write(path, finished)?;
             (finished.len(), false)
         }
         Dest::Replace(path) => replace_if_smaller(path, input.bytes.len(), finished)?,
     };
     let reported = if kept_original { How::Lossless } else { how };
-    let gate = if kept_original {
-        avatar::check(picture.width, picture.height, written, reported)
-    } else {
-        gate.clone()
-    };
     report(
         job,
         picture,
-        input.bytes.len(),
-        written,
+        (input.bytes.len(), written),
         reported,
-        &gate,
         kept_original,
+        density,
     );
-    Ok(gate.status)
+    Ok(())
 }
 
 /// Keep the original when the new bytes are not smaller.
@@ -80,30 +88,37 @@ fn replace_if_smaller(
 fn report(
     job: &Job,
     picture: &Picture,
-    before: usize,
-    after: usize,
+    sizes: (usize, usize),
     how: How,
-    gate: &Gate,
     kept_original: bool,
+    density: &DensityLine,
 ) {
     let name = job
         .source
         .as_ref()
         .map_or_else(|| "stdin".to_owned(), |path| path.display().to_string());
-    let verdict = match gate.status {
-        avatar::Status::Fit => "avatar=ok",
-        avatar::Status::Rejected => "avatar=no",
-    };
     let kept = if kept_original { "  kept-original" } else { "" };
+    let dpi_text = match job.dpi {
+        Some(dpi) if density.show_dpi && !kept_original => format!("  dpi={dpi}"),
+        _ => String::new(),
+    };
+    let format = if kept_original {
+        picture.kind.as_str()
+    } else {
+        job.ext.map_or_else(|| picture.kind.as_str(), Ext::as_str)
+    };
     eprintln!(
-        "{name}  {before} -> {after}  {}  {}x{}  {}  strip={}  {verdict}{kept}",
+        "{name}  {} -> {}  {}  {}x{}  {format}  strip={}{dpi_text}{kept}",
+        sizes.0,
+        sizes.1,
         how.as_str(),
         picture.width,
         picture.height,
-        picture.kind.as_str(),
         job.strip.as_str()
     );
-    if let Some(reason) = &gate.reason {
-        eprintln!("{reason}");
+    if let Some(note) = density.note.as_deref() {
+        if !kept_original {
+            eprintln!("{note}");
+        }
     }
 }

@@ -1,4 +1,4 @@
-//! The sample logo must fit a GitHub avatar, and the binary must stay offline.
+//! The sample logo still decodes, and the binary must stay offline.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -13,26 +13,24 @@ fn smashbin() -> Command {
 }
 
 fn logo() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/github-avatar.jpg")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/logo.jpg")
 }
 
 #[test]
-fn the_logo_fits_a_github_avatar() {
+fn the_logo_stays_a_jpeg() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let out = dir.path().join("avatar.jpg");
+    let out = dir.path().join("logo-out.jpg");
     smashbin()
         .arg(logo())
         .arg("--out")
         .arg(&out)
         .assert()
         .success()
-        .stderr(predicate::str::contains("avatar=ok"))
         .stderr(predicate::str::contains("1024x1024"))
         .stderr(predicate::str::contains("lossless"));
 
     let bytes = std::fs::read(&out).expect("read output");
     assert!(bytes.starts_with(&[0xFF, 0xD8]), "output is a JPEG");
-    assert!(bytes.len() < 1_000_000, "GitHub allows less than 1 MB");
     let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).expect("jpeg");
     assert_eq!(decoder.dimensions(), (1024, 1024));
 }
@@ -40,7 +38,7 @@ fn the_logo_fits_a_github_avatar() {
 #[test]
 fn strip_all_removes_the_color_profile() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let out = dir.path().join("avatar.jpg");
+    let out = dir.path().join("logo-out.jpg");
     let before = std::fs::read(logo()).expect("logo");
     smashbin()
         .arg(logo())
@@ -73,8 +71,7 @@ fn a_byte_cap_rewrites_the_jpeg_under_that_cap() {
         .args(["--bytes", "40kb", "--out"])
         .arg(&out)
         .assert()
-        .success()
-        .stderr(predicate::str::contains("avatar=ok"));
+        .success();
     let bytes = std::fs::read(&out).expect("small");
     assert!(bytes.len() <= 40_000, "got {} bytes", bytes.len());
     assert!(bytes.starts_with(&[0xFF, 0xD8]));
@@ -130,7 +127,7 @@ fn binary_does_not_phone_home() {
     assert_no_network_libraries(&bin);
 
     let dir = tempfile::tempdir().expect("temp dir");
-    let out = dir.path().join("avatar.jpg");
+    let out = dir.path().join("logo-out.jpg");
     let output = run_with_network_denied(
         &bin,
         &[
@@ -281,6 +278,130 @@ fn config_flag_uses_that_file_and_not_the_one_beside_the_image() {
         .success();
     assert!(dir.path().join("logo_strip_safe_quality_30.jpg").is_file());
     assert!(!dir.path().join("logo_strip_safe_width_10.jpg").exists());
+}
+
+#[test]
+fn a_missing_output_folder_is_created() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("wide.jpg");
+    write_jpeg(&source, 4, 2);
+    let out = dir.path().join("icons").join("nested").join("wide.jpg");
+    smashbin()
+        .arg(&source)
+        .arg("--out")
+        .arg(&out)
+        .assert()
+        .success();
+    assert!(out.is_file(), "missing {}", out.display());
+}
+
+#[test]
+fn a_missing_job_folder_is_created() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("wide.jpg");
+    write_jpeg(&source, 4, 2);
+    let config = dir.path().join("jobs.json");
+    std::fs::write(&config, r#"{"jobs":[{"width":2},{"height":1}]}"#).expect("config");
+    let out_dir = dir.path().join("set").join("icons");
+    smashbin()
+        .arg(&source)
+        .arg("-c")
+        .arg(&config)
+        .arg("--out")
+        .arg(&out_dir)
+        .assert()
+        .success();
+    assert!(out_dir.join("wide_strip_safe_width_2.jpg").is_file());
+    assert!(out_dir.join("wide_strip_safe_height_1.jpg").is_file());
+}
+
+#[test]
+fn dpi_is_stored_and_the_pixels_stay() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("wide.jpg");
+    write_jpeg(&source, 4, 2);
+    smashbin()
+        .arg(&source)
+        .args(["--dpi", "300"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("dpi=300"))
+        .stderr(predicate::str::contains("4x2"));
+    let out = dir.path().join("wide_strip_safe_dpi_300.jpg");
+    let bytes = std::fs::read(&out).expect("dpi jpeg");
+    let start = bytes
+        .windows(5)
+        .position(|window| window == b"JFIF\0")
+        .expect("JFIF");
+    let pair = 300u16.to_be_bytes();
+    assert_eq!(bytes[start + 7], 1);
+    assert_eq!(
+        &bytes[start + 8..start + 12],
+        &[pair[0], pair[1], pair[0], pair[1]]
+    );
+    let decoder =
+        image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).expect("jpeg");
+    assert_eq!(decoder.dimensions(), (4, 2));
+}
+
+#[test]
+fn a_gif_cannot_store_dpi() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("dot.gif");
+    let bytes = [
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C, 0x00,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x4C, 0x01, 0x00, 0x3B,
+    ];
+    std::fs::write(&source, bytes).expect("gif");
+    smashbin()
+        .arg(&source)
+        .args(["--dpi", "72"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("not stored"))
+        .stderr(predicate::str::contains("no display density"));
+    assert!(dir.path().join("dot_strip_safe_dpi_72.gif").is_file());
+}
+
+#[test]
+fn ext_writes_png_and_webp() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("wide.jpg");
+    write_jpeg(&source, 4, 2);
+    smashbin()
+        .arg(&source)
+        .args(["-e", "png"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("convert"))
+        .stderr(predicate::str::contains("PNG"))
+        .stderr(predicate::str::contains("4x2"));
+    let png = std::fs::read(dir.path().join("wide_strip_safe.png")).expect("png");
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(png)).expect("png");
+    assert_eq!(decoder.dimensions(), (4, 2));
+
+    smashbin()
+        .arg(&source)
+        .args(["--ext", "webp"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("WEBP"));
+    let webp = std::fs::read(dir.path().join("wide_strip_safe.webp")).expect("webp");
+    assert!(webp.starts_with(b"RIFF") && webp.get(8..12) == Some(b"WEBP".as_slice()));
+}
+
+#[test]
+fn quality_does_not_mix_with_a_png_ext() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("wide.jpg");
+    write_jpeg(&source, 2, 2);
+    smashbin()
+        .arg(&source)
+        .args(["--ext", "png", "--quality", "40"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--ext jpg"));
 }
 
 #[test]
