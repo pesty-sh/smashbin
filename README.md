@@ -98,41 +98,66 @@ jobs:
   - quality: 40
 ```
 
-## Build
-
-`make` compiles `target/release/smashbin` for this Mac. It does not copy the binary onto your PATH. The Intel build is stamped macOS 10.12 so a 2014 Mac can run it. `make` calls `~/.cargo/bin/cargo`, not the Homebrew cargo on PATH. Homebrew's compiler stamps macOS 13.0.
-
-| Command | What it writes | Installs? |
-|---|---|---|
-| `make` | `target/release/smashbin` | no |
-| `make build-silicon` | `target/aarch64-apple-darwin/release/smashbin` | no |
-| `make build-windows` | `target/x86_64-pc-windows-gnu/release/smashbin.exe` | no |
-| `make deb` | `dist/smashbin-linux-amd64`, `dist/smashbin-linux-arm64`, and a `.deb` for each | no |
-
-`make doctor` prints which cargo and which linker will be used.
-
-Windows needs `brew install mingw-w64`. The linker is `x86_64-w64-mingw32-gcc`.
-
-Linux is built on this Mac. The glibc floor is 2.27, which is Ubuntu 18.04. That same binary runs on Ubuntu 20.04, 22.04, and 24.04, Debian 10 through 13, and Arch, because those ship a newer glibc. Intel and AMD are one build. 64-bit ARM is the other. Docker is not used. The Linux binaries are not copied over the Mac one.
-
 ## Install
 
-The Mac install is Homebrew, from the tap at `/Users/developers/Projects/pesty-sh/homebrew-tap`:
+### Homebrew
+
+The formula lives in [pesty-sh/homebrew-tap](https://github.com/pesty-sh/homebrew-tap). Trust is stored on the Mac. Run the tap and trust commands once.
 
 ```bash
-brew install pesty-sh/tap/smashbin
+brew tap pesty-sh/tap
+brew trust --tap pesty-sh/tap
+HOMEBREW_NO_AUTO_UPDATE=1 brew install pesty-sh/tap/smashbin
+smashbin --version
 ```
 
-That installs the tagged `0.1.5` tarball. `--HEAD` still builds the latest commit on `master`. The formula is `Formula/smashbin.rb` in the tap. This repo does not keep a second copy.
+That installs the tagged `0.1.5` tarball. The first install compiles with Homebrew's Rust and needs a network connection. `--HEAD` still builds the latest commit on `master`. `HOMEBREW_NO_AUTO_UPDATE=1` stops Homebrew from fetching every tap before this one formula.
 
-The Linux install is the apt repository at `/Users/developers/Projects/pesty-sh/apt`. From that directory, after `make deb`:
+### apt
+
+The package lives in [pesty-sh/apt](https://github.com/pesty-sh/apt) and is served from `https://pesty-sh.github.io/apt`. Ubuntu 18.04 and newer, and Debian 10 and newer, can install it. Apt picks `amd64` or `arm64`. Run the key and source-list commands once.
+
+The signing-key fingerprint is `2564 D17C 2F8B EC6A 9E59 6BB0 2B0D 9ACE 648D D6FF`.
 
 ```bash
-python3 publish.py \
-  /Users/developers/Projects/pesty-sh/rust/smashbin/dist/smashbin_0.1.5-1_amd64.deb \
-  /Users/developers/Projects/pesty-sh/rust/smashbin/dist/smashbin_0.1.5-1_arm64.deb
+sudo mkdir -p /usr/share/keyrings
+curl -fsSL https://pesty-sh.github.io/apt/pesty-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/pesty-archive-keyring.gpg >/dev/null
 ```
 
-That copies the packages into `pool/` and signs `dists/stable`. This repo does not keep a second copy of the apt repository.
+```bash
+echo "deb [signed-by=/usr/share/keyrings/pesty-archive-keyring.gpg] https://pesty-sh.github.io/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/pesty.list
+```
+
+```bash
+sudo apt-get update
+sudo apt-get install smashbin
+smashbin --version
+```
+
+`stable` is the channel. `main` is the section. Later upgrades are `sudo apt-get update` then `sudo apt-get install smashbin`.
 
 There is no update checker in the program. It will not grow one.
+
+## Build
+
+Install [rustup](https://rustup.rs) so `~/.cargo/bin/cargo` and `~/.cargo/bin/rustc` exist. `Cargo.toml` asks for Rust 1.88. `make` calls that rustup cargo by path. It does not copy a binary onto `PATH`. `make doctor` prints the cargo, rustc, Windows linker, and Linux glibc floor the Makefile will use.
+
+| Command | What it writes | Linker | Installs? |
+|---|---|---|---|
+| `make` | `target/release/smashbin` | the host Apple linker, stamped macOS 10.12 on Intel | no |
+| `make build-silicon` | `target/aarch64-apple-darwin/release/smashbin` | the Apple linker, stamped macOS 11.0 | no |
+| `make build-windows` | `target/x86_64-pc-windows-gnu/release/smashbin.exe` | `x86_64-w64-mingw32-gcc` from mingw-w64 | no |
+| `make deb` | `dist/smashbin-linux-amd64`, `dist/smashbin-linux-arm64`, and a `.deb` for each | Zig through `cargo-zigbuild`, glibc 2.27 | no |
+
+Host macOS needs Xcode's command-line tools so `rustc` can invoke `ld`. Apple silicon from an Intel host needs `rustup target add aarch64-apple-darwin`.
+
+Windows is the `x86_64-pc-windows-gnu` target. Install the MinGW linker once (`mingw-w64` on macOS Homebrew, or the matching `gcc-mingw-w64` package on Linux), then:
+
+```bash
+rustup target add x86_64-pc-windows-gnu
+make build-windows
+```
+
+Linux does not use Docker. `make deb` installs `cargo-zigbuild` if it is missing and may download Zig into `~/.cache/smashbin`. The glibc floor is 2.27 (Ubuntu 18.04). That binary also runs where glibc is newer: Ubuntu 20.04, 22.04, and 24.04, Debian 10 through 13, and Arch. Intel and AMD are one build. 64-bit ARM is the other. Those files stay in `dist/` and are not copied over the host binary.
