@@ -166,6 +166,23 @@ fn width_keeps_the_aspect_ratio() {
 }
 
 #[test]
+fn a_1024_by_512_width_of_512_is_256_tall() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("wide.jpg");
+    write_jpeg(&source, 1024, 512);
+    smashbin()
+        .arg(&source)
+        .args(["-w", "512"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("resize"))
+        .stderr(predicate::str::contains("512x256"));
+    let bytes = std::fs::read(dir.path().join("wide_strip_safe_width_512.jpg")).expect("resized");
+    let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).expect("jpeg");
+    assert_eq!(decoder.dimensions(), (512, 256));
+}
+
+#[test]
 fn height_keeps_the_aspect_ratio() {
     let dir = tempfile::tempdir().expect("temp dir");
     let source = dir.path().join("wide.jpg");
@@ -195,6 +212,7 @@ fn both_sides_use_the_typed_pixels() {
         .arg(&out)
         .assert()
         .success()
+        .stderr(predicate::str::contains("crop"))
         .stderr(predicate::str::contains("2x2"));
     let bytes = std::fs::read(&out).expect("resized");
     let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).expect("jpeg");
@@ -281,6 +299,24 @@ fn config_flag_uses_that_file_and_not_the_one_beside_the_image() {
 }
 
 #[test]
+fn a_dot_out_folder_sits_beside_the_input() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let photos = dir.path().join("photos");
+    std::fs::create_dir(&photos).expect("photos");
+    let source = photos.join("wide.jpg");
+    write_jpeg(&source, 4, 2);
+    let cwd = tempfile::tempdir().expect("cwd");
+    smashbin()
+        .current_dir(cwd.path())
+        .arg(&source)
+        .args(["--out", "./smashed"])
+        .assert()
+        .success();
+    assert!(photos.join("smashed").join("wide_strip_safe.jpg").is_file());
+    assert!(!cwd.path().join("smashed").exists());
+}
+
+#[test]
 fn a_missing_output_folder_is_created() {
     let dir = tempfile::tempdir().expect("temp dir");
     let source = dir.path().join("wide.jpg");
@@ -313,6 +349,68 @@ fn a_missing_job_folder_is_created() {
         .success();
     assert!(out_dir.join("wide_strip_safe_width_2.jpg").is_file());
     assert!(out_dir.join("wide_strip_safe_height_1.jpg").is_file());
+}
+
+#[test]
+fn a_mismatched_size_crops_from_the_centre() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("square.png");
+    write_png_rgb(&source, 4, 4);
+    smashbin()
+        .arg(&source)
+        .args(["-w", "4", "-h", "2"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("crop"))
+        .stderr(predicate::str::contains("4x2"));
+    let bytes = std::fs::read(dir.path().join("square_strip_safe_width_4_height_2.png")).expect("crop");
+    let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(bytes)).expect("png");
+    assert_eq!(decoder.dimensions(), (4, 2));
+}
+
+#[test]
+fn cv_top_sits_at_the_top() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("tall.png");
+    write_png_bands(&source);
+    smashbin()
+        .arg(&source)
+        .args(["-h", "1", "--cv", "top"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("crop"))
+        .stderr(predicate::str::contains("2x1"));
+    let bytes = std::fs::read(dir.path().join("tall_strip_safe_height_1_cv_top.png")).expect("crop");
+    let image = image::load_from_memory(&bytes).expect("png");
+    assert_eq!(image.to_rgb8().get_pixel(0, 0), &image::Rgb([255, 0, 0]));
+}
+
+#[test]
+fn cv_bottom_sits_at_the_bottom() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("tall.png");
+    write_png_bands(&source);
+    smashbin()
+        .arg(&source)
+        .args(["-h", "1", "--cv", "0"])
+        .assert()
+        .success();
+    let bytes = std::fs::read(dir.path().join("tall_strip_safe_height_1_cv_0.png")).expect("crop");
+    let image = image::load_from_memory(&bytes).expect("png");
+    assert_eq!(image.to_rgb8().get_pixel(0, 0), &image::Rgb([0, 0, 255]));
+}
+
+#[test]
+fn cv_needs_a_height() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("wide.jpg");
+    write_jpeg(&source, 4, 2);
+    smashbin()
+        .arg(&source)
+        .args(["--cv", "top"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--cv needs --height"));
 }
 
 #[test]
@@ -370,7 +468,7 @@ fn ext_writes_png_and_webp() {
     write_jpeg(&source, 4, 2);
     smashbin()
         .arg(&source)
-        .args(["-e", "png"])
+        .args(["-f", "png"])
         .assert()
         .success()
         .stderr(predicate::str::contains("convert"))
@@ -383,7 +481,7 @@ fn ext_writes_png_and_webp() {
 
     smashbin()
         .arg(&source)
-        .args(["--ext", "webp"])
+        .args(["--format", "webp"])
         .assert()
         .success()
         .stderr(predicate::str::contains("WEBP"));
@@ -398,10 +496,10 @@ fn quality_does_not_mix_with_a_png_ext() {
     write_jpeg(&source, 2, 2);
     smashbin()
         .arg(&source)
-        .args(["--ext", "png", "--quality", "40"])
+        .args(["--format", "png", "--quality", "40"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--ext jpg"));
+        .stderr(predicate::str::contains("--format jpg"));
 }
 
 #[test]
@@ -416,6 +514,22 @@ fn flags_do_not_mix_with_a_smasher_file() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("smasher file lists the jobs"));
+}
+
+fn write_png_rgb(path: &std::path::Path, width: u32, height: u32) {
+    image::RgbImage::from_pixel(width, height, image::Rgb([10, 20, 30]))
+        .save(path)
+        .expect("write png");
+}
+
+fn write_png_bands(path: &std::path::Path) {
+    let mut image = image::RgbImage::new(2, 3);
+    for x in 0..2 {
+        image.put_pixel(x, 0, image::Rgb([255, 0, 0]));
+        image.put_pixel(x, 1, image::Rgb([0, 255, 0]));
+        image.put_pixel(x, 2, image::Rgb([0, 0, 255]));
+    }
+    image.save(path).expect("write png");
 }
 
 fn write_jpeg(path: &std::path::Path, width: u32, height: u32) {

@@ -14,7 +14,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::cli::Strip;
+use crate::cli::{Align, Strip};
 use crate::error::SmashError;
 use crate::ext::Ext;
 
@@ -27,6 +27,10 @@ pub struct Spec {
     pub width: Option<u32>,
     /// New height, when the job sets it.
     pub height: Option<u32>,
+    /// Vertical crop, when the job sets it.
+    pub cv: Option<Align>,
+    /// Horizontal crop, when the job sets it.
+    pub ch: Option<Align>,
     /// Display density in pixels per inch, when the job sets it.
     pub dpi: Option<u16>,
     /// Output container, when the job sets it.
@@ -117,6 +121,8 @@ fn one_job(index: usize, value: Value) -> Result<Spec, String> {
         strip: None,
         width: None,
         height: None,
+        cv: None,
+        ch: None,
         dpi: None,
         ext: None,
         quality: None,
@@ -135,12 +141,19 @@ fn one_job(index: usize, value: Value) -> Result<Spec, String> {
             "strip" => spec.strip = Some(strip_value(index, value)?),
             "width" => spec.width = Some(whole(index, "width", value, 1, 65_535)?),
             "height" => spec.height = Some(whole(index, "height", value, 1, 65_535)?),
+            "cv" => spec.cv = Some(align_value(index, "cv", value, true)?),
+            "ch" => spec.ch = Some(align_value(index, "ch", value, false)?),
             "dpi" => {
                 spec.dpi = Some(u16::try_from(whole(index, "dpi", value, 1, 65_535)?).map_err(
                     |_| format!("job {} dpi needs a number from 1 to 65535", index + 1),
                 )?);
             }
-            "ext" => spec.ext = Some(ext_value(index, value)?),
+            "format" | "ext" => {
+                if spec.ext.is_some() {
+                    return Err(format!("job {} has a duplicate field `{key}`", index + 1));
+                }
+                spec.ext = Some(ext_value(index, value)?);
+            }
             "quality" => {
                 spec.quality = Some(
                     u8::try_from(whole(index, "quality", value, 1, 100)?).map_err(|_| {
@@ -163,11 +176,38 @@ fn one_job(index: usize, value: Value) -> Result<Spec, String> {
     Ok(spec)
 }
 
+fn align_value(index: usize, _field: &str, value: Value, vertical: bool) -> Result<Align, String> {
+    let error = if vertical {
+        "--cv is top, middle, bottom, or 0 to 100"
+    } else {
+        "--ch is left, middle, right, or 0 to 100"
+    };
+    let text = match value {
+        Value::String(text) => text,
+        Value::Number(number) => number.to_string(),
+        _ => return Err(format!("job {} {error}", index + 1)),
+    };
+    let parsed = if vertical {
+        crate::cli::parse_align(
+            &text,
+            &[("top", 100), ("middle", 50), ("center", 50), ("bottom", 0)],
+            error,
+        )
+    } else {
+        crate::cli::parse_align(
+            &text,
+            &[("left", 0), ("middle", 50), ("center", 50), ("right", 100)],
+            error,
+        )
+    };
+    parsed.map_err(|message| format!("job {} {message}", index + 1))
+}
+
 fn ext_value(index: usize, value: Value) -> Result<Ext, String> {
     let Value::String(text) = value else {
-        return Err(format!("job {} ext is {}", index + 1, Ext::LIST));
+        return Err(format!("job {} format is {}", index + 1, Ext::LIST));
     };
-    Ext::parse(&text).ok_or_else(|| format!("job {} ext is {}", index + 1, Ext::LIST))
+    Ext::parse(&text).ok_or_else(|| format!("job {} format is {}", index + 1, Ext::LIST))
 }
 
 fn strip_value(index: usize, value: Value) -> Result<Strip, String> {

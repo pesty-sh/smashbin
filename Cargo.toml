@@ -1,6 +1,6 @@
 [package]
 name = "smashbin"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 rust-version = "1.88"
 description = "Offline image smasher. Strips metadata and resizes."
@@ -18,7 +18,7 @@ categories = ["command-line-utilities", "multimedia::images"]
 #   img-parts     lifts metadata out of a JPEG, PNG, or GIF container
 #   png           recompresses a PNG. Pure Rust. Pixels stay the same.
 #   image         reads pixels and resizes them. JPEG and GIF go through it.
-#                 `--ext` also writes the pure-Rust formats listed below.
+#                 `--format` also writes the pure-Rust formats listed below.
 #                 WebP is lossless. AVIF and lossy WebP need a C library, so
 #                 they are not enabled.
 #   jpeg-encoder  writes those pixels into a new JPEG

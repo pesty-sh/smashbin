@@ -21,7 +21,9 @@ pub enum How {
     Lossless,
     /// The picture was resized. No quality override was applied.
     Resize,
-    /// `--ext` wrote a different container.
+    /// The picture was cropped. Pixels were not stretched.
+    Crop,
+    /// `--format` wrote a different container.
     Convert,
     /// One JPEG encode at a chosen quality.
     Quality(u8),
@@ -36,6 +38,7 @@ impl How {
         match self {
             Self::Lossless => "lossless".to_owned(),
             Self::Resize => "resize".to_owned(),
+            Self::Crop => "crop".to_owned(),
             Self::Convert => "convert".to_owned(),
             Self::Quality(quality) => format!("quality={quality}"),
             Self::Bytes { quality, fit } => {
@@ -56,16 +59,16 @@ impl How {
 /// `--quality` or `--bytes` was asked of a PNG or GIF, or the JPEG could
 /// not be decoded.
 ///
-/// `resized` is true when step 5 changed the pixel size. `jpeg` is that
-/// resized JPEG, so this step does not decode it again.
+/// `base` is lossless, resize, or crop from step 5. `jpeg` is that
+/// JPEG, so this step does not decode it again.
 pub fn apply(
     lossless_bytes: &[u8],
     picture: &Picture,
     job: &Job,
-    resized: bool,
+    base: How,
     jpeg: Option<&RgbImage>,
 ) -> Result<(Vec<u8>, How), SmashError> {
-    let kept = if resized { How::Resize } else { How::Lossless };
+    let kept = base;
     if job.quality.is_none() && job.byte_cap.is_none() {
         return Ok((lossless_bytes.to_vec(), kept));
     }

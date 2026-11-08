@@ -25,15 +25,16 @@ use crate::ext::Ext;
 Steps, in order:
   1. Remove private metadata. The color profile stays unless you pass --strip all.
   2. Resize when --width or --height is set. A missing side keeps the aspect ratio.
+     Both sides with a different aspect crop. --cv and --ch place the slice.
      --dpi sets the stored pixels per inch. The pixel grid does not change.
   3. Shrink that file without a second lossy pass.
   4. If you passed --quality or --bytes, that replaces step 3 with a new JPEG.
-  5. --ext writes a different container. WebP is lossless. A GIF keeps its first frame.
+  5. --format writes a different container. WebP is lossless. A GIF keeps its first frame.
 
 A smasher.json or smasher.yaml next to the image runs each job from top to bottom.
 -c names a smasher file that lives somewhere else.
 
---ext can write jpg, png, gif, webp, bmp, tif, tga, ico, qoi, ppm, hdr, or ff.
+--format can write jpg, png, gif, webp, bmp, tif, tga, ico, qoi, ppm, hdr, or ff.
 This version does not pad a picture into a square."
 )]
 pub struct Args {
@@ -54,12 +55,20 @@ pub struct Args {
     #[arg(short = 'h', long, value_name = "PX", value_parser = clap::value_parser!(u32).range(1..=65535))]
     height: Option<u32>,
 
+    /// Vertical crop. `top`, `middle`, `bottom`, or 0 to 100. 0 is the bottom, 100 is the top. `-c` is the smasher file, so this flag is `--cv`.
+    #[arg(long = "cv", value_name = "POS", value_parser = parse_cv_arg)]
+    cv: Option<Align>,
+
+    /// Horizontal crop. `left`, `middle`, `right`, or 0 to 100. 0 is the left, 100 is the right.
+    #[arg(long = "ch", value_name = "POS", value_parser = parse_ch_arg)]
+    ch: Option<Align>,
+
     /// Display density in pixels per inch, from 1 to 65535. The pixel grid stays the same.
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..=65535))]
     dpi: Option<u16>,
 
     /// Write this container. `jpg`, `png`, `gif`, `webp`, `bmp`, `tif`, `tga`, `ico`, `qoi`, `ppm`, `hdr`, or `ff`.
-    #[arg(short = 'e', long, value_name = "EXT", value_parser = parse_ext_arg)]
+    #[arg(short = 'f', long = "format", value_name = "FORMAT", value_parser = parse_ext_arg)]
     ext: Option<Ext>,
 
     /// Make a new JPEG at this quality, from 1 to 100. Cannot be combined with --bytes.
@@ -74,7 +83,7 @@ pub struct Args {
     #[arg(short = 'c', long, value_name = "FILE")]
     config: Option<PathBuf>,
 
-    /// Write here. A directory keeps the generated name inside it. Missing folders are created.
+    /// Write here. A directory keeps the generated name inside it. Missing folders are created. `./folder` and `.\folder` sit next to the input file.
     #[arg(short, long, conflicts_with = "stdout")]
     out: Option<PathBuf>,
 
@@ -111,6 +120,15 @@ impl Strip {
     }
 }
 
+/// A crop edge, as a percent of the leftover space.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Align {
+    /// 0 to 100. For `--cv`, 0 is the bottom and 100 is the top. For `--ch`, 0 is the left and 100 is the right.
+    pub percent: u8,
+    /// The word or number as typed, for the generated file name.
+    pub token: String,
+}
+
 /// One image and the flags that apply to it.
 pub struct Job {
     /// `None` means stdin.
@@ -127,9 +145,13 @@ pub struct Job {
     pub width: Option<u32>,
     /// Set only when the user typed `--height`.
     pub height: Option<u32>,
+    /// Set only when the user typed `--cv`.
+    pub cv: Option<Align>,
+    /// Set only when the user typed `--ch`.
+    pub ch: Option<Align>,
     /// Set only when the user typed `--dpi`.
     pub dpi: Option<u16>,
-    /// Set only when the user typed `--ext`.
+    /// Set only when the user typed `--format`.
     pub ext: Option<Ext>,
 }
 
@@ -159,7 +181,7 @@ pub fn parse_args() -> Args {
     Args::parse()
 }
 
-const CONFIG_FLAGS: &str = "the smasher file lists the jobs. Leave off --strip, --width, --height, --dpi, --ext, --quality, and --bytes.";
+const CONFIG_FLAGS: &str = "the smasher file lists the jobs. Leave off --strip, --width, --height, --cv, --ch, --dpi, --format, --quality, and --bytes.";
 
 /// Turn the command line into one job per file.
 ///
@@ -198,11 +220,6 @@ pub fn jobs(args: &Args) -> Result<Vec<Job>, SmashError> {
             "--stdout can take one image. Pass one file, or leave the file off and use stdin.",
         ));
     }
-    if let Some(path) = &args.out {
-        if args.files.len() > 1 {
-            prepare_out_dir(path)?;
-        }
-    }
 
     let mut jobs = Vec::new();
     for file in &args.files {
@@ -226,10 +243,62 @@ fn prepare_out_dir(path: &Path) -> Result<(), SmashError> {
     Ok(())
 }
 
+/// `./folder` and `.\folder` land next to the input. Other paths stay as typed.
+fn dest_from_out(
+    out: &Path,
+    source: Option<&Path>,
+    name: OsString,
+    many: bool,
+) -> Result<Dest, SmashError> {
+    let resolved = resolve_out(out, source);
+    if out_is_folder(out, &resolved, many) {
+        prepare_out_dir(&resolved)?;
+        Ok(Dest::Create(resolved.join(name)))
+    } else {
+        Ok(Dest::Create(resolved))
+    }
+}
+
+fn resolve_out(out: &Path, source: Option<&Path>) -> PathBuf {
+    let Some(rest) = dot_relative(out) else {
+        return out.to_path_buf();
+    };
+    let Some(source) = source else {
+        return out.to_path_buf();
+    };
+    let parent = match source.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    if rest.as_os_str().is_empty() {
+        parent.to_path_buf()
+    } else {
+        parent.join(rest)
+    }
+}
+
+fn dot_relative(out: &Path) -> Option<&Path> {
+    let text = out.to_str()?;
+    if text == "." || text == "./" || text == ".\\" {
+        return Some(Path::new(""));
+    }
+    text.strip_prefix("./")
+        .or_else(|| text.strip_prefix(".\\"))
+        .map(Path::new)
+}
+
+fn out_is_folder(typed: &Path, resolved: &Path, many: bool) -> bool {
+    many
+        || resolved.is_dir()
+        || (dot_relative(typed).is_some() && resolved.extension().is_none() && !resolved.exists())
+}
+
 fn cli_sets_a_job(args: &Args) -> bool {
     args.strip != Strip::Safe
         || args.width.is_some()
         || args.height.is_some()
+        || args.cv.is_some()
+        || args.ch.is_some()
         || args.dpi.is_some()
         || args.ext.is_some()
         || args.quality.is_some()
@@ -241,6 +310,8 @@ fn spec_from_cli(args: &Args) -> Spec {
         strip: Some(args.strip),
         width: args.width,
         height: args.height,
+        cv: args.cv.clone(),
+        ch: args.ch.clone(),
         dpi: args.dpi,
         ext: args.ext,
         quality: args.quality,
@@ -266,24 +337,17 @@ fn specs_for(
 }
 
 fn stdin_jobs(args: &Args, specs: &[Spec]) -> Result<Vec<Job>, SmashError> {
-    if specs.len() > 1 {
-        match &args.out {
-            Some(path) => prepare_out_dir(path)?,
-            None => {
-                return Err(SmashError::message(
-                    "--out must be a directory when the smasher file has more than one job.",
-                ));
-            }
-        }
+    if specs.len() > 1 && args.out.is_none() {
+        return Err(SmashError::message(
+            "--out must be a directory when the smasher file has more than one job.",
+        ));
     }
     let mut jobs = Vec::with_capacity(specs.len());
     for spec in specs {
         let parsed = parsed_job(spec)?;
+        let name = output_name(Path::new("image.img"), &parsed);
         let dest = match &args.out {
-            Some(path) if path.is_dir() || specs.len() > 1 => {
-                Dest::Create(path.join(output_name(Path::new("image.img"), &parsed)))
-            }
-            Some(path) => Dest::Create(path.clone()),
+            Some(path) => dest_from_out(path, None, name, specs.len() > 1)?,
             None => Dest::Stdout,
         };
         jobs.push(Job {
@@ -294,6 +358,8 @@ fn stdin_jobs(args: &Args, specs: &[Spec]) -> Result<Vec<Job>, SmashError> {
             byte_cap: parsed.byte_cap,
             width: parsed.width,
             height: parsed.height,
+            cv: parsed.cv,
+            ch: parsed.ch,
             dpi: parsed.dpi,
             ext: parsed.ext,
         });
@@ -317,11 +383,6 @@ fn push_file_jobs(
             "--replace can take one job. The smasher file has more than one.",
         ));
     }
-    if specs.len() > 1 {
-        if let Some(path) = &args.out {
-            prepare_out_dir(path)?;
-        }
-    }
     for spec in specs {
         let parsed = parsed_job(spec)?;
         let name = output_name(file, &parsed);
@@ -330,11 +391,7 @@ fn push_file_jobs(
         } else if args.replace {
             Dest::Replace(file.to_path_buf())
         } else if let Some(path) = &args.out {
-            if path.is_dir() || args.files.len() > 1 {
-                Dest::Create(path.join(name))
-            } else {
-                Dest::Create(path.clone())
-            }
+            dest_from_out(path, Some(file), name, args.files.len() > 1 || specs.len() > 1)?
         } else {
             Dest::Create(file.with_file_name(name))
         };
@@ -346,6 +403,8 @@ fn push_file_jobs(
             byte_cap: parsed.byte_cap,
             width: parsed.width,
             height: parsed.height,
+            cv: parsed.cv,
+            ch: parsed.ch,
             dpi: parsed.dpi,
             ext: parsed.ext,
         });
@@ -359,6 +418,8 @@ struct ParsedJob {
     byte_cap: Option<u64>,
     width: Option<u32>,
     height: Option<u32>,
+    cv: Option<Align>,
+    ch: Option<Align>,
     dpi: Option<u16>,
     ext: Option<Ext>,
     bytes: Option<String>,
@@ -377,6 +438,8 @@ fn parsed_job(spec: &Spec) -> Result<ParsedJob, SmashError> {
         byte_cap,
         width: spec.width,
         height: spec.height,
+        cv: spec.cv.clone(),
+        ch: spec.ch.clone(),
         dpi: spec.dpi,
         ext: spec.ext,
         bytes: spec.bytes.clone(),
@@ -386,8 +449,8 @@ fn parsed_job(spec: &Spec) -> Result<ParsedJob, SmashError> {
 /// `logo.jpg` with no extra flags becomes `logo_strip_safe.jpg`.
 ///
 /// The original stem stays first. Then `_`, then the input vars in this
-/// fixed order: `strip`, `width`, `height`, `dpi`, `quality`, `bytes`. A var that
-/// was not set is left out. `--quality` and `--bytes` cannot both be set.
+/// fixed order: `strip`, `width`, `height`, `cv`, `ch`, `dpi`, `quality`, `bytes`.
+/// A var that was not set is left out. `--quality` and `--bytes` cannot both be set.
 fn output_name(path: &Path, job: &ParsedJob) -> OsString {
     let stem = path.file_stem().unwrap_or(std::ffi::OsStr::new("image"));
     let mut name = stem.to_os_string();
@@ -400,6 +463,14 @@ fn output_name(path: &Path, job: &ParsedJob) -> OsString {
     if let Some(height) = job.height {
         name.push("_height_");
         name.push(height.to_string());
+    }
+    if let Some(cv) = job.cv.as_ref() {
+        name.push("_cv_");
+        name.push(&cv.token);
+    }
+    if let Some(ch) = job.ch.as_ref() {
+        name.push("_ch_");
+        name.push(&ch.token);
     }
     if let Some(dpi) = job.dpi {
         name.push("_dpi_");
@@ -423,7 +494,44 @@ fn output_name(path: &Path, job: &ParsedJob) -> OsString {
 }
 
 fn parse_ext_arg(text: &str) -> Result<Ext, String> {
-    Ext::parse(text).ok_or_else(|| format!("--ext is {}. `{text}` is none of those.", Ext::LIST))
+    Ext::parse(text).ok_or_else(|| format!("--format is {}. `{text}` is none of those.", Ext::LIST))
+}
+
+fn parse_cv_arg(text: &str) -> Result<Align, String> {
+    parse_align(
+        text,
+        &[("top", 100), ("middle", 50), ("center", 50), ("bottom", 0)],
+        "--cv is top, middle, bottom, or 0 to 100",
+    )
+}
+
+fn parse_ch_arg(text: &str) -> Result<Align, String> {
+    parse_align(
+        text,
+        &[("left", 0), ("middle", 50), ("center", 50), ("right", 100)],
+        "--ch is left, middle, right, or 0 to 100",
+    )
+}
+
+/// A name, a number, or a number with `%`.
+pub fn parse_align(text: &str, names: &[(&str, u8)], error: &str) -> Result<Align, String> {
+    let trimmed = text.trim();
+    let key = trimmed.trim_end_matches('%').trim().to_ascii_lowercase();
+    if let Some((_, percent)) = names.iter().find(|(name, _)| *name == key) {
+        return Ok(Align {
+            percent: *percent,
+            token: key,
+        });
+    }
+    if let Ok(percent) = key.parse::<u8>() {
+        if percent <= 100 {
+            return Ok(Align {
+                percent,
+                token: percent.to_string(),
+            });
+        }
+    }
+    Err(error.to_owned())
 }
 
 /// `40KB` becomes `40kb`, so the file name matches the typed size.
@@ -541,11 +649,29 @@ mod tests {
             Some(Path::new("logo_strip_safe_dpi_144.jpg"))
         );
 
-        let ext = Args::try_parse_from(["smashbin", "--ext", "webp", "logo.jpg"]).unwrap();
+        let ext = Args::try_parse_from(["smashbin", "--format", "webp", "logo.jpg"]).unwrap();
         let jobs = super::jobs(&ext).unwrap();
         assert_eq!(
             jobs[0].dest_path(),
             Some(Path::new("logo_strip_safe.webp"))
+        );
+    }
+
+    #[test]
+    fn a_dot_out_folder_sits_beside_the_input() {
+        let source = Path::new("photos/logo.jpg");
+        let beside = source.parent().unwrap().join("smashed");
+        assert_eq!(
+            super::resolve_out(Path::new("./smashed"), Some(source)),
+            beside
+        );
+        assert_eq!(
+            super::resolve_out(Path::new(".\\smashed"), Some(source)),
+            beside
+        );
+        assert_eq!(
+            super::resolve_out(Path::new("smashed"), Some(source)),
+            Path::new("smashed")
         );
     }
 }

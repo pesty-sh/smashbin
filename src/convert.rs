@@ -1,4 +1,4 @@
-//! `--ext` writes a different container from the same pixels.
+//! `--format` writes a different container from the same pixels.
 //!
 //! The source is still a PNG, JPEG, or GIF. This step runs only when the
 //! requested container is a different one. JPEG output uses the same encoder
@@ -29,7 +29,7 @@ pub fn apply(
     jpeg: Option<&RgbImage>,
 ) -> Result<(Vec<u8>, How), SmashError> {
     let Some(ext) = job.ext else {
-        return Err(SmashError::message("missing --ext"));
+        return Err(SmashError::message("missing --format"));
     };
     if ext == Ext::Jpeg {
         return write_jpeg(bytes, job, resized, jpeg);

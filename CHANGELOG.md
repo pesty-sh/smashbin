@@ -2,6 +2,14 @@
 
 smashbin is MIT licensed. The terms are in [LICENSE](LICENSE). Copyright (c) 2026 Stuart.
 
+## 0.1.5
+
+- `--format` / `-f` writes `jpg`, `png`, `gif`, `webp`, `bmp`, `tif`, `tga`, `ico`, `qoi`, `ppm`, `hdr`, or `ff`. WebP is lossless. This flag was `--ext` / `-e`.
+- `--out ./folder` and `--out .\folder` sit next to the input file.
+- Both `--width` and `--height` with a different aspect crop from the centre. They do not stretch.
+- `--cv` is `top`, `middle`, `bottom`, or 0 to 100. 0 is the bottom, 100 is the top. `--ch` is `left`, `middle`, `right`, or 0 to 100. The slice stays inside the picture.
+- The generated file name is `strip`, `width`, `height`, `cv`, `ch`, `dpi`, `quality`, `bytes`.
+
 ## 0.1.4
 
 - `--dpi` sets the stored pixels per inch. The pixel grid stays the same. JPEG and PNG store it in the file. WebP stores it in an EXIF block. A container with no density field is still written, and stderr names the original image's density.

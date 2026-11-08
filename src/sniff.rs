@@ -1,7 +1,7 @@
 //! Step 3. Name the format and read the width and height.
 //!
 //! The file extension is ignored. A `.jpg` that is really a PNG is a PNG.
-//! This version reads PNG, JPEG, and GIF. `--ext` can write a different
+//! This version reads PNG, JPEG, and GIF. `--format` can write a different
 //! container after this step.
 
 use img_parts::jpeg::Jpeg;

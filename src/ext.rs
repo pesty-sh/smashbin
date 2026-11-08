@@ -1,4 +1,4 @@
-//! The container named by `--ext` / `-e`.
+//! The container named by `--format` / `-f`.
 //!
 //! These are the formats the pure-Rust `image` crate can write without a C
 //! library. WebP here is lossless. A lossy WebP encoder is `libwebp`, which
@@ -37,7 +37,7 @@ pub enum Ext {
 }
 
 impl Ext {
-    /// The words `--ext` accepts, for errors.
+    /// The words `--format` accepts, for errors.
     pub const LIST: &'static str =
         "jpg, png, gif, webp, bmp, tif, tga, ico, qoi, ppm, hdr, or ff";
 
