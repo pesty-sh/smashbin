@@ -83,7 +83,7 @@ Two optional workflows build the Mac binaries. Neither runs on a pull request, s
 | [release-apple-silicon.yml](../.github/workflows/release-apple-silicon.yml) | Actions → Run workflow, or a `v*` tag | `smashbin-vX.Y.Z-aarch64-apple-darwin.tar.gz` and a `.sha256` file |
 | [release-macos-intel.yml](../.github/workflows/release-macos-intel.yml) | Actions → Run workflow, or a `v*` tag | `smashbin-vX.Y.Z-x86_64-apple-darwin.tar.gz` and a `.sha256` file |
 
-Each has its own concurrency group and `cancel-in-progress: false`. The main CI cannot cancel them. `gh release upload --clobber` adds the files to the release the main workflow created, or creates that release if it is not there yet. `MACOSX_DEPLOYMENT_TARGET` is `10.12` for Intel and `11.0` for Apple silicon.
+Each has its own concurrency group and `cancel-in-progress: false`. The main CI cannot cancel them. `gh release upload --clobber` adds the files to the release. A tag push uses that tag. A manual run on `master` uploads to `v` plus the version in `Cargo.toml`, and creates that release if it is missing. A manual run used to keep the tarball only on the runner, so the universal job then failed with "No GitHub Release named v0.1.5". `MACOSX_DEPLOYMENT_TARGET` is `10.12` for Intel and `11.0` for Apple silicon.
 
 ### 5. Universal Mac binary, also optional
 

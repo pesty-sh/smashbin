@@ -7,9 +7,11 @@
 # It runs when you click Actions → Release macOS Intel → Run workflow,
 # or when you push a tag such as v0.1.5.
 #
-# On a tag it uploads the Intel tarball and a one-file checksum to the
-# GitHub Release. If the Release workflow already created that release,
+# On a tag, or a manual run on master, it uploads the Intel tarball and a
+# one-file checksum to the GitHub Release. If that release already exists,
 # this appends. It does not fail just because the release exists.
+# A manual run uses the tag v plus the version in Cargo.toml, for example
+# v0.1.5. The universal workflow downloads that exact name.
 #
 # cancel-in-progress is false, and the group name is not the main CI
 # group. A newer pull-request run cannot cancel this job with
@@ -83,20 +85,31 @@ jobs:
           name="smashbin-v${version}-x86_64-apple-darwin.tar.gz"
           tar -czf "dist/${name}" -C target/x86_64-apple-darwin/release smashbin
           (cd dist && shasum -a 256 "$name" > "${name}.sha256")
+          echo "version=${version}" >> "$GITHUB_ENV"
           echo "archive=${name}" >> "$GITHUB_ENV"
           cat "dist/${name}.sha256"
 
+      # A manual run on master uploads too. The universal workflow can only
+      # download a tarball that is already on the release. Leaving the file
+      # on the runner is why "Release macOS universal" exited 1 with
+      # "No GitHub Release named v0.1.5".
+      # CHANGE ME: refs/heads/master if the default branch has another name.
       - name: Upload to the GitHub Release
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || github.ref == 'refs/heads/master'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          tag="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="v${version}"
+          fi
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "smashbin ${tag}" --notes "Intel macOS native build. The main release notes are added by the Release workflow."
+            gh release create "$tag" --target "${GITHUB_SHA}" --title "smashbin ${tag}" --notes "Intel macOS native build. The main release notes are added by the Release workflow."
           fi
           gh release upload "$tag" \
             "dist/${archive}" \
             "dist/${archive}.sha256" \
             --clobber
+          echo "Uploaded ${archive} to ${tag}"

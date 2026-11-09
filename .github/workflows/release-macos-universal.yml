@@ -62,7 +62,10 @@ jobs:
           # Check the release first. A missing release should say so here,
           # not as a confusing download error a few lines later.
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "No GitHub Release named ${TAG}. Run the other release workflows first." >&2
+            echo "No GitHub Release named ${TAG}." >&2
+            echo "Run Release macOS Intel and Release Apple Silicon on master first." >&2
+            echo "They upload ${intel} and ${silicon} to release ${TAG}." >&2
+            echo "The older release tag without the v does not count." >&2
             exit 1
           fi
           # Name the missing file. Both can be missing. Say each one.
