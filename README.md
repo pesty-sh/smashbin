@@ -123,7 +123,7 @@ The Mac install is Homebrew, from the tap at `/Users/developers/Projects/pesty-s
 brew install pesty-sh/tap/smashbin
 ```
 
-That installs the tagged `0.1.5` tarball. `--HEAD` still builds the latest commit on `master`. The formula is `Formula/smashbin.rb` in the tap. This repo does not keep a second copy.
+That installs the tagged `v0.1.5` source tarball and compiles it. There is no bottle. The formula is `Formula/smashbin.rb` in the tap. This repo does not keep a second copy. `--HEAD` still builds the latest commit on `master`.
 
 The Linux install is the apt repository at `/Users/developers/Projects/pesty-sh/apt`. From that directory, after `make deb`:
 
