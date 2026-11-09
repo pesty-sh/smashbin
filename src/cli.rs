@@ -288,8 +288,7 @@ fn dot_relative(out: &Path) -> Option<&Path> {
 }
 
 fn out_is_folder(typed: &Path, resolved: &Path, many: bool) -> bool {
-    many
-        || resolved.is_dir()
+    many || resolved.is_dir()
         || (dot_relative(typed).is_some() && resolved.extension().is_none() && !resolved.exists())
 }
 
@@ -391,7 +390,12 @@ fn push_file_jobs(
         } else if args.replace {
             Dest::Replace(file.to_path_buf())
         } else if let Some(path) = &args.out {
-            dest_from_out(path, Some(file), name, args.files.len() > 1 || specs.len() > 1)?
+            dest_from_out(
+                path,
+                Some(file),
+                name,
+                args.files.len() > 1 || specs.len() > 1,
+            )?
         } else {
             Dest::Create(file.with_file_name(name))
         };
@@ -651,10 +655,7 @@ mod tests {
 
         let ext = Args::try_parse_from(["smashbin", "--format", "webp", "logo.jpg"]).unwrap();
         let jobs = super::jobs(&ext).unwrap();
-        assert_eq!(
-            jobs[0].dest_path(),
-            Some(Path::new("logo_strip_safe.webp"))
-        );
+        assert_eq!(jobs[0].dest_path(), Some(Path::new("logo_strip_safe.webp")));
     }
 
     #[test]

@@ -363,7 +363,8 @@ fn a_mismatched_size_crops_from_the_centre() {
         .success()
         .stderr(predicate::str::contains("crop"))
         .stderr(predicate::str::contains("4x2"));
-    let bytes = std::fs::read(dir.path().join("square_strip_safe_width_4_height_2.png")).expect("crop");
+    let bytes =
+        std::fs::read(dir.path().join("square_strip_safe_width_4_height_2.png")).expect("crop");
     let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(bytes)).expect("png");
     assert_eq!(decoder.dimensions(), (4, 2));
 }
@@ -380,7 +381,8 @@ fn cv_top_sits_at_the_top() {
         .success()
         .stderr(predicate::str::contains("crop"))
         .stderr(predicate::str::contains("2x1"));
-    let bytes = std::fs::read(dir.path().join("tall_strip_safe_height_1_cv_top.png")).expect("crop");
+    let bytes =
+        std::fs::read(dir.path().join("tall_strip_safe_height_1_cv_top.png")).expect("crop");
     let image = image::load_from_memory(&bytes).expect("png");
     assert_eq!(image.to_rgb8().get_pixel(0, 0), &image::Rgb([255, 0, 0]));
 }
@@ -437,8 +439,7 @@ fn dpi_is_stored_and_the_pixels_stay() {
         &bytes[start + 8..start + 12],
         &[pair[0], pair[1], pair[0], pair[1]]
     );
-    let decoder =
-        image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).expect("jpeg");
+    let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).expect("jpeg");
     assert_eq!(decoder.dimensions(), (4, 2));
 }
 
@@ -573,14 +574,32 @@ fn embedded_hosts(bytes: &[u8]) -> Vec<String> {
     hosts
 }
 
+/// True when `needle` appears as its own word, ignoring ASCII case.
+///
+/// A letter on either side does not count. Rust 1.99 packs the next string
+/// straight after `InvalidSignature`, and those bytes contain `ureq`.
+/// That is the word "signature", not the ureq crate.
 fn contains_ascii_ignore_case(bytes: &[u8], needle: &str) -> bool {
     let needle = needle.as_bytes();
-    bytes.windows(needle.len()).any(|window| {
-        window
-            .iter()
-            .zip(needle)
-            .all(|(byte, expected)| byte.eq_ignore_ascii_case(expected))
-    })
+    if needle.is_empty() || needle.len() > bytes.len() {
+        return false;
+    }
+    bytes
+        .windows(needle.len())
+        .enumerate()
+        .any(|(index, window)| {
+            let matches = window
+                .iter()
+                .zip(needle)
+                .all(|(byte, expected)| byte.eq_ignore_ascii_case(expected));
+            if !matches {
+                return false;
+            }
+            let before_ok = index == 0 || !bytes[index - 1].is_ascii_alphabetic();
+            let after = index + needle.len();
+            let after_ok = after == bytes.len() || !bytes[after].is_ascii_alphabetic();
+            before_ok && after_ok
+        })
 }
 
 fn is_host_byte(byte: u8) -> bool {
@@ -615,11 +634,48 @@ fn assert_no_network_libraries(bin: &std::path::Path) {
 }
 
 fn run_with_network_denied(bin: &std::path::Path, args: &[&str]) -> std::process::Output {
-    let mut command = std::process::Command::new("sandbox-exec");
-    command.args(["-p", "(version 1)\n(allow default)\n(deny network*)\n"]);
-    command.arg(bin);
-    command
+    // A fresh network namespace has no routes, so a connect would fail.
+    // The program should still write the image.
+    //
+    // macOS uses sandbox-exec. A desktop Linux can use `unshare` with a
+    // user namespace. GitHub's Ubuntu runners reject the write to uid_map,
+    // so there the same namespace is opened with passwordless sudo.
+    // Windows has neither tool. The string and library checks above are
+    // what that runner can prove, and the program is still run so a crash
+    // fails the test.
+    if cfg!(target_os = "macos") {
+        return std::process::Command::new("sandbox-exec")
+            .args(["-p", "(version 1)\n(allow default)\n(deny network*)\n"])
+            .arg(bin)
+            .args(args)
+            .output()
+            .expect("run smashbin with network denied");
+    }
+
+    if cfg!(target_os = "linux") {
+        let user_namespace = std::process::Command::new("unshare")
+            .args(["--net", "--map-root-user"])
+            .arg(bin)
+            .args(args)
+            .output();
+        if let Ok(output) = user_namespace {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let namespace_blocked =
+                stderr.contains("uid_map") || stderr.contains("Operation not permitted");
+            if !namespace_blocked {
+                return output;
+            }
+        }
+        return std::process::Command::new("sudo")
+            .args(["-n", "unshare", "--net", "--"])
+            .arg(bin)
+            .args(args)
+            .output()
+            .expect("run smashbin with network denied");
+    }
+
+    std::process::Command::new(bin)
         .args(args)
         .output()
-        .expect("run smashbin with network denied")
+        .expect("run smashbin")
 }

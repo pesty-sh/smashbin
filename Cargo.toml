@@ -61,6 +61,35 @@ codegen-units = 1
 strip = true
 panic = "abort"
 
+# Metadata for the `cargo deb` tool used by GitHub Actions.
+# `make deb` does not read this table. It still builds the glibc 2.27
+# packages with packaging/mkdeb.py.
+# cargo-deb is not linked into the smashbin binary. The release workflow
+# installs it only while packing a .deb.
+# Compression is not a field here. The workflow passes `--compress-type gzip`
+# so Ubuntu 14.04 and Debian 8 dpkg can unpack the archive. Current cargo-deb
+# defaults to xz, which some of those old dpkg builds reject.
+# An empty depends list stops cargo-deb from adding libc6. The GitHub Release
+# binaries are static musl and do not need the system C library.
+[package.metadata.deb]
+maintainer = "pesty-sh <pesty@pesty.sh>"
+copyright = "2026 pesty-sh"
+section = "graphics"
+priority = "optional"
+depends = ""
+extended-description = """
+Strips metadata and resizes an image on your own machine.
+No network access and no telemetry.
+The GitHub Release build is a static binary. It does not need glibc.
+Installing or removing this package only adds or removes /usr/bin/smashbin.
+"""
+assets = [
+    # `target/release/` is a token cargo-deb rewrites for the real target dir.
+    ["target/release/smashbin", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/smashbin/README.md", "644"],
+    ["LICENSE", "usr/share/doc/smashbin/LICENSE", "644"],
+]
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

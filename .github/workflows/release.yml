@@ -1,0 +1,267 @@
+# Release pipeline.
+#
+# This file does not run on pull requests. It runs only when a tag matching
+# `v*` is pushed, for example `v0.1.5`. Pushing that tag creates the GitHub
+# Release if every job succeeds. Do not push a tag until you mean to publish.
+#
+# Order:
+#   1. matrix builds (one job per CPU/OS target)
+#   2. .deb packages on the four Linux jobs (cargo-deb, gzip)
+#   3. SHA256SUMS over the Linux and Windows archives
+#   4. GitHub Release
+# Mac builds are release-macos-intel.yml and release-apple-silicon.yml.
+# The universal binary is release-macos-universal.yml, run by hand.
+#
+# Homebrew and apt are not updated here. Those repositories are separate.
+# docs/RELEASING.md explains each step in plain language.
+#
+# Public repositories are not billed for GitHub-hosted runner minutes.
+
+name: Release
+
+# Trigger. A tag is a name stuck to one commit, like a bookmark.
+# `v*` means "only tags that start with v". `git tag -a v0.1.5` starts this
+# file. `git tag 0.1.5` does not, because the v is missing.
+# Pull requests do not start this file. That is why opening a PR never
+# publishes a release.
+# CHANGE ME: the tag pattern, if your project uses a different prefix.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Permissions are what the robot is allowed to do on GitHub.
+# `contents: write` is the permission that creates a Release and uploads
+# files to it. `contents: read` would let the build run but the upload
+# would be rejected.
+# CHANGE ME: this file does not use a secret. The token is the automatic
+# GITHUB_TOKEN. If you add signing later, store the key as a repository
+# secret and read it with ${{ secrets.YOUR_KEY_NAME }}. Never paste a key here.
+permissions:
+  contents: write
+
+jobs:
+  # One job description, repeated. `matrix` is the list of repetitions.
+  # Each list item is one computer and one Rust target. They run at the
+  # same time. `name` is what you see in the GitHub checks list.
+  build:
+    name: ${{ matrix.target }}
+    # CHANGE ME: `os` in each row below is the GitHub computer image.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Keep going so the log shows every broken target, not only the first.
+      # The GitHub Release still waits for all of them.
+      fail-fast: false
+      matrix:
+        include:
+          # macOS is not in this matrix. Both Mac runner pools were blocking
+          # pull requests when they shared this workflow. Use
+          # release-macos-intel.yml and release-apple-silicon.yml.
+          # The universal binary is release-macos-universal.yml, run by hand.
+
+          # Linux musl. "Static" means the binary carries its own C library
+          # (musl) instead of borrowing the one on the server. That is why
+          # the same file can run on Ubuntu 14.04 and on Debian 8: it does
+          # not need their glibc. The Rust target name and the Debian
+          # package architecture are different words for the same machine.
+          # CHANGE ME: `target` is the Rust triple. `deb` is the Debian arch
+          # name (amd64, arm64, armhf, i386). Drop a row you do not ship.
+          # `make deb` on the Mac still builds glibc 2.27 for amd64 and arm64
+          # only, without Docker. Do not retarget that script to musl.
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            archive: tar
+            deb: amd64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar
+            deb: arm64
+
+          # Cross-linked on the x86_64 runner. rust-lld does the link.
+          # See .cargo/config.toml and packaging/rust-lld.sh.
+          - os: ubuntu-24.04
+            target: armv7-unknown-linux-musleabihf
+            archive: tar
+            deb: armhf
+          - os: ubuntu-24.04
+            target: i686-unknown-linux-musl
+            archive: tar
+            deb: i386
+
+          # Windows 10 / Server 2016+, 64-bit x86. Zip, because that is what
+          # Windows users expect. aarch64-pc-windows-msvc is omitted: the
+          # hosted image does not reliably ship the ARM64 MSVC libraries.
+          # CHANGE ME: `make build-windows` on the Mac still uses mingw
+          # (`x86_64-pc-windows-gnu`). This job uses MSVC.
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            archive: zip
+
+    steps:
+      # Download this git commit onto the runner.
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml says `stable`. Cargo.toml rust-version is 1.88.
+      # `targets:` installs the standard library for that one triple only.
+      # CHANGE ME: the toolchain pin, if you stop tracking stable.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      # The tag is `v0.1.5`. Cargo.toml says `0.1.5`. They must match.
+      - name: Version matches the tag
+        shell: bash
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          test "$tag" = "$cargo_version"
+          echo "tag=$tag" >> "$GITHUB_ENV"
+
+      # `--locked` refuses to build if Cargo.lock does not match Cargo.toml.
+      # `--release` is the optimised profile from Cargo.toml (lto, strip).
+      # The output path is target/<triple>/release/smashbin.
+      # CHANGE ME: the binary name is the Cargo package name, `smashbin`.
+      - name: Build
+        shell: bash
+        run: |
+          set -eu
+          # Empty on Linux and Windows. Set on the Mac workflows.
+          if [ -n "${{ matrix.minos }}" ]; then
+            export MACOSX_DEPLOYMENT_TARGET="${{ matrix.minos }}"
+          fi
+          cargo build --release --locked --target "${{ matrix.target }}"
+
+      - name: macOS deployment target
+        if: matrix.minos
+        run: ./packaging/check-macos-minos.sh "target/${{ matrix.target }}/release/smashbin" "${{ matrix.minos }}"
+
+      # Fail the release if the binary links a TLS or HTTP library.
+      # A musl binary is fully static, so this check passes immediately.
+      # CHANGE ME: the script looks for `smashbin` or `smashbin.exe`.
+      - name: Link check
+        shell: bash
+        run: |
+          set -eu
+          ext=""
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            ext=".exe"
+          fi
+          ./packaging/check-linked-libs.sh "target/${{ matrix.target }}/release/smashbin${ext}"
+
+      # The archive name includes the version and the Rust target so a person
+      # can see which file they downloaded. The binary inside is just `smashbin`
+      # (or `smashbin.exe`).
+      # A .tar.gz is a compressed folder, used on macOS and Linux.
+      # A .zip is the same idea, used on Windows (`tar -a` writes a zip).
+      # CHANGE ME: the `smashbin-v` prefix in the archive name, and `smashbin.exe`.
+      - name: Pack archive
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p dist
+          name="smashbin-v${tag}-${{ matrix.target }}"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            tar -a -cf "dist/${name}.zip" -C "target/${{ matrix.target }}/release" smashbin.exe
+          else
+            tar -czf "dist/${name}.tar.gz" -C "target/${{ matrix.target }}/release" smashbin
+          fi
+          rustc --version > "dist/${name}.buildinfo"
+
+      # A .deb is the package Ubuntu and Debian install with apt.
+      # cargo-deb is a tool. It is not linked into the smashbin binary.
+      # The description, maintainer, installed files, and the empty dependency
+      # list live in Cargo.toml under [package.metadata.deb].
+      # CHANGE ME: that table, not this step, when the package name or the
+      # installed files change. The package name follows Cargo.toml `name`.
+      # cargo-deb reads [package.metadata.deb] in Cargo.toml.
+      # --no-build packs the binary this job already linked.
+      # --compress-type gzip writes data.tar.gz. xz is cargo-deb's default
+      # and is the reason this flag is explicit.
+      # --no-default-features on install avoids compiling liblzma into cargo-deb.
+      - name: Debian package
+        if: matrix.deb
+        shell: bash
+        run: |
+          set -eu
+          # CHANGE ME: keep gzip if you raise this version. 3.6.0 is the
+          # cargo-deb the sibling tools verified.
+          cargo install cargo-deb --version 3.6.0 --locked --no-default-features
+          cargo deb --no-build --compress-type gzip --target "${{ matrix.target }}"
+          mkdir -p dist
+          find target -name 'smashbin_*.deb' -exec cp {} dist/ \;
+          python3 - dist/smashbin_*.deb <<'PY'
+          import glob, sys
+          path = glob.glob("dist/smashbin_*.deb")[0]
+          data = open(path, "rb").read()
+          if b"data.tar.gz" not in data:
+              sys.exit("deb is not gzip-compressed: " + path)
+          print("gzip deb", path)
+          PY
+
+      # An artifact is a file kept for a later job in this same run.
+      # The publish job downloads these. They are not the GitHub Release yet.
+      # CHANGE ME: `name` only if two jobs would upload the same artifact name.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # Checksums, then the GitHub Release.
+  # `needs: build` means "wait until every matrix leg has finished".
+  # If one leg failed, this job does not run, so a half-built release
+  # is not published. Homebrew and apt are not touched.
+  # CHANGE ME: `needs` if you rename the `build` job.
+  publish:
+    name: Checksums and GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # SHA-256 is a fingerprint of a file. SHA256SUMS is a list of
+      # "fingerprint, then filename". A person who downloads the archive
+      # runs `sha256sum -c SHA256SUMS` and sees whether the bytes match.
+      # The file does not list itself. buildinfo notes are removed before
+      # the upload so they are not release assets.
+      # CHANGE ME: docs/RELEASE_NOTES_TEMPLATE.md is the release text.
+      # The word VERSION in that file is replaced with the tag, without the v.
+      - name: SHA256SUMS and release notes
+        run: |
+          set -eu
+          cd dist
+          # Hash archives and .deb files. Skip build notes and this file.
+          find . -maxdepth 1 -type f ! -name '*.buildinfo' ! -name 'SHA256SUMS' -printf '%P\n' \
+            | sort \
+            | xargs sha256sum \
+            > SHA256SUMS
+          version="${GITHUB_REF_NAME#v}"
+          # The template uses the word VERSION as a placeholder.
+          sed "s/VERSION/${version}/g" "$GITHUB_WORKSPACE/docs/RELEASE_NOTES_TEMPLATE.md" > "$RUNNER_TEMP/NOTES.md"
+          {
+            echo
+            echo "Built with:"
+            echo
+            cat ./*.buildinfo
+          } >> "$RUNNER_TEMP/NOTES.md"
+          echo "---- SHA256SUMS ----"
+          cat SHA256SUMS
+          # Do not attach the buildinfo files. They are notes, not downloads.
+          rm -f ./*.buildinfo
+
+      # Create the GitHub Release for this tag and attach every file in dist/.
+      # `fail_on_unmatched_files` makes the job fail if the glob matches nothing,
+      # instead of publishing an empty release.
+      # CHANGE ME: `files` if your artifacts are not in dist/.
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: ${{ runner.temp }}/NOTES.md
+          fail_on_unmatched_files: true

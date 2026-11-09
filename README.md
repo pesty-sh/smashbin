@@ -135,4 +135,6 @@ python3 publish.py \
 
 That copies the packages into `pool/` and signs `dists/stable`. This repo does not keep a second copy of the apt repository.
 
+A tagged GitHub Release is built by the workflows in `.github/workflows/`. The steps are in `docs/RELEASING.md`. The Windows zip is not signed, so Windows SmartScreen warns the first time you open `smashbin.exe`. winget and Scoop are later.
+
 There is no update checker in the program. It will not grow one.

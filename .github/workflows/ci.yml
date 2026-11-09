@@ -1,0 +1,207 @@
+# CI compiles and tests smashbin on every target the release will ship.
+# It does not publish anything. A green run means the tests passed on that runner.
+#
+# Public repositories are not billed for these GitHub-hosted minutes.
+# See docs/RELEASING.md.
+
+name: CI
+
+# This is the pull-request gate. It compiles and tests. It does not publish.
+# A pull request starts it, and so does a push to `master` after a merge.
+# A tag does not start it. Tags start release.yml instead.
+# CHANGE ME: the branch name under `push.branches` if your default branch
+# is not `master`.
+# One run per change. A push to a pull-request branch used to start this
+# workflow twice (once for `push`, once for `pull_request`). Pull requests
+# cover feature branches. Pushes to `master` cover the result after merge.
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+# One run per branch. A new push cancels the older run of THIS workflow
+# only, because the group name includes the workflow name and the ref.
+# It does not cancel release-macos-intel.yml or release-apple-silicon.yml.
+# Those files use their own groups and cancel-in-progress: false.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS stays out of the pull-request path. Apple silicon runners
+          # queue, and the Intel runner was cancelled while queued when it
+          # shared a concurrency group with a newer CI run. Build those
+          # binaries from release-macos-intel.yml and release-apple-silicon.yml.
+          # A capacity failure is not a code bug. Rerun the Mac workflow.
+
+          # Linux musl, native. The runner's CPU matches the binary.
+          # "Static" means the test binary carries musl instead of using
+          # the runner's glibc. CHANGE ME: `target` if you drop an architecture.
+          # `deb_smoke: true` is only on amd64. It installs cargo-deb and checks
+          # the .deb is gzip. The metadata it reads is [package.metadata.deb]
+          # in Cargo.toml, not a setting in this file.
+          # `make deb` on the Mac is a different build: glibc 2.27, amd64 and
+          # arm64 only, no Docker. Do not change that Makefile target to match
+          # this matrix.
+          - name: Linux x86_64 musl
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            deb_smoke: true
+          - name: Linux aarch64 musl
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+
+          # Linux musl, cross-linked on x86_64. Tests run under QEMU.
+          # .cargo/config.toml points these two targets at packaging/rust-lld.sh
+          # so the host linker is not asked to read foreign object files.
+          - name: Linux armv7 musl
+            os: ubuntu-24.04
+            target: armv7-unknown-linux-musleabihf
+            qemu: qemu-arm
+            runner_var: CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_RUNNER
+          - name: Linux i686 musl
+            os: ubuntu-24.04
+            target: i686-unknown-linux-musl
+            qemu: qemu-i386
+            runner_var: CARGO_TARGET_I686_UNKNOWN_LINUX_MUSL_RUNNER
+
+          # Windows 10 / Server 2016 and newer, 64-bit x86.
+          # aarch64-pc-windows-msvc is not here. The hosted image does not
+          # reliably include the ARM64 MSVC libraries, so the link would fail.
+          # CHANGE ME: the local Makefile still cross-compiles with mingw
+          # (`x86_64-pc-windows-gnu`) because that linker exists on the Mac.
+          # This job uses MSVC because the Windows runner has those libraries.
+          - name: Windows x86_64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml says `stable`, so this is the latest stable Rust.
+      # Cargo.toml rust-version is the floor (1.88). The extra target is only
+      # the one this job builds. That keeps the download small.
+      # CHANGE ME: pin a version here if you stop tracking stable, and keep it
+      # at least as new as rust-version in Cargo.toml.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # qemu-user can run a static musl binary built for another CPU.
+      # A fully static binary does not need a foreign sysroot.
+      - name: QEMU for cross tests
+        if: matrix.qemu
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+
+      # Formatting is the same on every OS. Check it once.
+      - name: Format
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked --target ${{ matrix.target }} -- -D warnings
+
+      - name: Test
+        shell: bash
+        run: |
+          set -eu
+          # Stamp the macOS test and release binaries with the floor for that CPU.
+          if [ -n "${{ matrix.minos }}" ]; then
+            export MACOSX_DEPLOYMENT_TARGET="${{ matrix.minos }}"
+          fi
+          # Tell Cargo to execute foreign test binaries with QEMU.
+          if [ -n "${{ matrix.qemu }}" ]; then
+            export ${{ matrix.runner_var }}="${{ matrix.qemu }}"
+          fi
+          cargo test --locked --target "${{ matrix.target }}"
+
+      # Fail if a networking crate appears in Cargo.lock, or if src/ or
+      # tests/ name the standard networking API. smashbin must not open a socket.
+      # CHANGE ME: packaging/banned-network-crates.txt when you review a new crate.
+      - name: No network crates or socket API
+        shell: bash
+        run: ./packaging/check-no-network.sh "${{ matrix.target }}"
+
+      - name: No C toolchain crates
+        shell: bash
+        run: ./packaging/check-no-c.sh "${{ matrix.target }}"
+
+      # The release profile is what we ship. Build it here so a link failure
+      # shows up before anyone pushes a tag.
+      - name: Release binary links no TLS or HTTP library
+        shell: bash
+        run: |
+          set -eu
+          if [ -n "${{ matrix.minos }}" ]; then
+            export MACOSX_DEPLOYMENT_TARGET="${{ matrix.minos }}"
+          fi
+          cargo build --release --locked --target "${{ matrix.target }}"
+          ext=""
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            ext=".exe"
+          fi
+          ./packaging/check-linked-libs.sh "target/${{ matrix.target }}/release/smashbin${ext}"
+
+      # vtool can show the minimum macOS the binary will load on.
+      # No macOS row is in this matrix, so this step is skipped.
+      - name: macOS deployment target
+        if: matrix.minos
+        run: ./packaging/check-macos-minos.sh "target/${{ matrix.target }}/release/smashbin" "${{ matrix.minos }}"
+
+      # One .deb, on the native amd64 leg, so a bad cargo-deb flag fails in CI
+      # instead of on the day somebody pushes a tag. The other three architectures
+      # use the same command in the release workflow.
+      - name: gzip .deb smoke test
+        if: matrix.deb_smoke == true
+        run: |
+          set -eu
+          # --no-default-features skips cargo-deb's liblzma build.
+          # Gzip is implemented in Rust inside cargo-deb (zopfli).
+          # CHANGE ME: 3.6.0 is the cargo-deb that writes gzip and still builds
+          # on the Rust this repo's siblings pin. Keep `--compress-type gzip`
+          # if you raise the version. xz is the default, and old dpkg rejects it.
+          cargo install cargo-deb --version 3.6.0 --locked --no-default-features
+          cargo deb --no-build --compress-type gzip --target "${{ matrix.target }}"
+          deb=$(find target -name 'smashbin_*.deb' -print | head -n 1)
+          test -n "$deb"
+          python3 - "$deb" <<'PY'
+          import sys
+          data = open(sys.argv[1], "rb").read()
+          # A .deb is an ar archive. Gzip members are named data.tar.gz.
+          # xz members would be data.tar.xz, which old dpkg may reject.
+          if b"data.tar.gz" not in data:
+              sys.exit("deb is not gzip-compressed")
+          if b"data.tar.xz" in data:
+              sys.exit("deb still contains an xz member")
+          print("gzip deb ok", sys.argv[1])
+          PY
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      # Licences, advisories, and the banned-crate list in deny.toml.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

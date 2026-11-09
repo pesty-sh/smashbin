@@ -38,8 +38,7 @@ pub enum Ext {
 
 impl Ext {
     /// The words `--format` accepts, for errors.
-    pub const LIST: &'static str =
-        "jpg, png, gif, webp, bmp, tif, tga, ico, qoi, ppm, hdr, or ff";
+    pub const LIST: &'static str = "jpg, png, gif, webp, bmp, tif, tga, ico, qoi, ppm, hdr, or ff";
 
     /// Read a typed extension. The leading dot is optional.
     #[must_use]
@@ -108,5 +107,4 @@ impl Ext {
             (Self::Jpeg, Kind::Jpeg) | (Self::Png, Kind::Png) | (Self::Gif, Kind::Gif)
         )
     }
-
 }

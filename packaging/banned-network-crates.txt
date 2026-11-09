@@ -1,0 +1,31 @@
+# Package names that must not appear in `cargo tree`.
+# One name per line. Lines starting with # are ignored.
+reqwest
+hyper
+hyper-util
+hyper-tls
+ureq
+tokio
+async-std
+surf
+isahc
+attohttpc
+curl
+curl-sys
+native-tls
+openssl
+openssl-sys
+rustls
+quinn
+quinn-proto
+h2
+h3
+socket2
+mio
+tungstenite
+tokio-tungstenite
+hickory-resolver
+trust-dns-resolver
+webpki-roots
+winhttp
+libcurl-sys
