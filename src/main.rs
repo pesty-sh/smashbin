@@ -86,23 +86,32 @@ fn smash_one(job: &cli::Job) -> Result<(), SmashError> {
     let (working, picture, jpeg, base) = match geom {
         Some(resize::Geom::Scale(size)) => {
             let scaled = resize::scale(&stripped, &source, size, keep_jpeg_file)?;
-            (scaled.bytes, scaled.picture, scaled.jpeg, lossy::How::Resize)
+            (
+                scaled.bytes,
+                scaled.picture,
+                scaled.jpeg,
+                lossy::How::Resize,
+            )
         }
         Some(resize::Geom::Crop(crop)) => {
             let cropped = resize::crop(&stripped, &source, crop, keep_jpeg_file)?;
-            (cropped.bytes, cropped.picture, cropped.jpeg, lossy::How::Crop)
+            (
+                cropped.bytes,
+                cropped.picture,
+                cropped.jpeg,
+                lossy::How::Crop,
+            )
         }
         None => (stripped, source, None, lossy::How::Lossless),
     };
     let changed = geom.is_some();
     // 5. Shrink the resized file. A quality override encodes the pixels below.
-    let lossless_bytes = if changing
-        || (changed && picture.kind == sniff::Kind::Jpeg && job.quality.is_some())
-    {
-        Vec::new()
-    } else {
-        lossless::shrink(&working, &picture)?
-    };
+    let lossless_bytes =
+        if changing || (changed && picture.kind == sniff::Kind::Jpeg && job.quality.is_some()) {
+            Vec::new()
+        } else {
+            lossless::shrink(&working, &picture)?
+        };
     // 6. Quality or a byte cap replaces step 5 when one of those flags was typed.
     let (finished, how) = if changing {
         convert::apply(&working, &picture, job, changed, jpeg.as_ref())?

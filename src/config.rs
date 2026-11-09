@@ -144,9 +144,11 @@ fn one_job(index: usize, value: Value) -> Result<Spec, String> {
             "cv" => spec.cv = Some(align_value(index, "cv", value, true)?),
             "ch" => spec.ch = Some(align_value(index, "ch", value, false)?),
             "dpi" => {
-                spec.dpi = Some(u16::try_from(whole(index, "dpi", value, 1, 65_535)?).map_err(
-                    |_| format!("job {} dpi needs a number from 1 to 65535", index + 1),
-                )?);
+                spec.dpi = Some(
+                    u16::try_from(whole(index, "dpi", value, 1, 65_535)?).map_err(|_| {
+                        format!("job {} dpi needs a number from 1 to 65535", index + 1)
+                    })?,
+                );
             }
             "format" | "ext" => {
                 if spec.ext.is_some() {

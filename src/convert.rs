@@ -51,9 +51,14 @@ fn encode_image(image: &DynamicImage, ext: Ext) -> Result<Vec<u8>, SmashError> {
     } else if ext == Ext::Farbfeld {
         write_farbfeld(&image.to_rgba16(), &mut cursor)?;
     } else {
-        image.write_to(&mut cursor, image_format(ext)).map_err(|error| {
-            SmashError::message(format!("this {} could not be written: {error}", ext.as_str()))
-        })?;
+        image
+            .write_to(&mut cursor, image_format(ext))
+            .map_err(|error| {
+                SmashError::message(format!(
+                    "this {} could not be written: {error}",
+                    ext.as_str()
+                ))
+            })?;
     }
     Ok(cursor.into_inner())
 }
@@ -90,7 +95,9 @@ fn write_farbfeld(
             rgba.height(),
             image::ExtendedColorType::Rgba16,
         )
-        .map_err(|error| SmashError::message(format!("this FARBFELD could not be written: {error}")))
+        .map_err(|error| {
+            SmashError::message(format!("this FARBFELD could not be written: {error}"))
+        })
 }
 
 fn write_jpeg(

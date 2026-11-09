@@ -338,8 +338,9 @@ fn crop_jpeg(
 ) -> Result<Scaled, SmashError> {
     let decoded = image::load_from_memory(bytes)
         .map_err(|error| SmashError::message(format!("this JPEG could not be decoded: {error}")))?;
-    let rgb = image::imageops::crop_imm(&decoded.to_rgb8(), crop.x, crop.y, crop.width, crop.height)
-        .to_image();
+    let rgb =
+        image::imageops::crop_imm(&decoded.to_rgb8(), crop.x, crop.y, crop.width, crop.height)
+            .to_image();
     let bytes = if keep_jpeg_file {
         lossy::encode_rgb(&rgb, 100)?
     } else {
