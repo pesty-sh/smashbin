@@ -634,21 +634,48 @@ fn assert_no_network_libraries(bin: &std::path::Path) {
 }
 
 fn run_with_network_denied(bin: &std::path::Path, args: &[&str]) -> std::process::Output {
-    // macOS has sandbox-exec. Linux CI does not. A fresh network namespace
-    // has no routes, so a connect would fail, and the program should still
-    // write the image.
-    let mut command = if cfg!(target_os = "macos") {
-        let mut command = std::process::Command::new("sandbox-exec");
-        command.args(["-p", "(version 1)\n(allow default)\n(deny network*)\n"]);
-        command
-    } else {
-        let mut command = std::process::Command::new("unshare");
-        command.args(["--net", "--map-root-user"]);
-        command
-    };
-    command.arg(bin);
-    command
+    // A fresh network namespace has no routes, so a connect would fail.
+    // The program should still write the image.
+    //
+    // macOS uses sandbox-exec. A desktop Linux can use `unshare` with a
+    // user namespace. GitHub's Ubuntu runners reject the write to uid_map,
+    // so there the same namespace is opened with passwordless sudo.
+    // Windows has neither tool. The string and library checks above are
+    // what that runner can prove, and the program is still run so a crash
+    // fails the test.
+    if cfg!(target_os = "macos") {
+        return std::process::Command::new("sandbox-exec")
+            .args(["-p", "(version 1)\n(allow default)\n(deny network*)\n"])
+            .arg(bin)
+            .args(args)
+            .output()
+            .expect("run smashbin with network denied");
+    }
+
+    if cfg!(target_os = "linux") {
+        let user_namespace = std::process::Command::new("unshare")
+            .args(["--net", "--map-root-user"])
+            .arg(bin)
+            .args(args)
+            .output();
+        if let Ok(output) = user_namespace {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let namespace_blocked =
+                stderr.contains("uid_map") || stderr.contains("Operation not permitted");
+            if !namespace_blocked {
+                return output;
+            }
+        }
+        return std::process::Command::new("sudo")
+            .args(["-n", "unshare", "--net", "--"])
+            .arg(bin)
+            .args(args)
+            .output()
+            .expect("run smashbin with network denied");
+    }
+
+    std::process::Command::new(bin)
         .args(args)
         .output()
-        .expect("run smashbin with network denied")
+        .expect("run smashbin")
 }
