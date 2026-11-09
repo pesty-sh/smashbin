@@ -1,0 +1,84 @@
+---
+description: pesty-sh house rules for Stuart's offline Rust CLI tools (rmbin, qrbin, smashbin, unbin) and their GitHub releases
+alwaysApply: true
+---
+
+# pesty-sh house rules
+
+These rules apply to every task in this repo. They record decisions Stuart has already made, so you don't need to ask him again.
+
+## Who you're working with
+- The owner is Stuart. Explain things plainly and briefly, in UK English.
+- Lead with the result. Report what actually ran, with links and run IDs, never what "should" work.
+- Make reversible choices yourself. Ask only before deleting, force-pushing, or anything public that can't be undone.
+
+## Product principles (all pesty-sh tools)
+- No internet access at runtime: no phone-home, telemetry, tracking, update checks or crash uploads. The tool works fully offline.
+- Be completely transparent. Document what the tool does and doesn't do, and its limits.
+- Pure Rust where possible. Keep dependencies few, and check them with cargo-deny.
+- Public docs must never name competitor apps. Write "Example app 1..N" instead. Any name key stays in a git-ignored `private/` folder and is never committed.
+- Destructive tools carry a prominent no-warranty and no-liability disclaimer, have a `--dry-run`, ask for one confirmation, and fail closed.
+- Licence for new tools: MIT OR Apache-2.0, unless the repo already says otherwise.
+
+## Code style
+- Write code as a tutorial for a beginner Rust developer: clear sections, comments explaining *why*, simple constructs first.
+- Organise modules as a skill pyramid. Basic building blocks come first, and higher layers depend only on lower ones. Show the tree in docs.
+- Build and test each function in real situations before adding the next. Easiest functions ship first.
+- Run `cargo fmt`, `cargo clippy -- -D warnings` and the tests before every commit.
+
+## Git and pull requests
+- Commit author and committer: `stuarteske <sdeske@googlemail.com>`. This also applies to annotated tag taggers.
+- Work on a branch and open a pull request. Merge only when CI is fully green.
+- Delete merged branches only after a release is confirmed.
+- Never force-push or rewrite pushed history without Stuart's explicit OK.
+
+## Release process (multi-OS, GitHub Actions)
+Supported targets:
+- Static musl Linux for x86_64, aarch64, armv7 (armhf) and i686 (i386).
+- Windows 10+ x86_64.
+- macOS 10.12+ on Intel, 11+ on Apple Silicon, plus a universal (lipo) binary. There are no per-macOS-version builds.
+
+If this repo's current workflows differ, keep them working, and move them toward this pattern only when asked to change releases.
+
+1. **`ci.yml` (pull requests):**
+   - Run fmt, clippy and tests.
+   - Build the four Linux musl targets plus Windows msvc.
+   - Run cargo-deny.
+   - Use `concurrency: ${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress: true`.
+   - Keep macOS out of the PR path, because Apple Silicon runners queue or get cancelled for capacity.
+2. **`release.yml` (tag `v*`):**
+   - Build the musl tarballs and the `.deb` files (cargo-deb with gzip compression, so old dpkg on Ubuntu 14.04 and Debian 8 can read them).
+   - Build the Windows zip.
+   - Write `SHA256SUMS` and create the GitHub release.
+3. **`release-macos-intel.yml` and `release-apple-silicon.yml`:**
+   - Trigger on `workflow_dispatch` and tag `v*`.
+   - Give each its own concurrency group with `cancel-in-progress: false`.
+   - Set `MACOSX_DEPLOYMENT_TARGET` to 10.12 for Intel and 11.0 for ARM.
+   - Upload with `gh release upload --clobber`.
+4. **`release-macos-universal.yml`:**
+   - `workflow_dispatch` with a `tag` input, run by hand after both Mac builds finish.
+   - Combine the two Mac binaries with `lipo -create`.
+   - The job has no checkout, so set `GH_REPO: ${{ github.repository }}`.
+   - Check that the release exists first, and name any missing tarball in the failure message.
+5. Mark project-specific lines with `# CHANGE ME:` so the workflows can be copied between sibling tools.
+6. **Cutting a release:**
+   - The version in `Cargo.toml` must match the tag.
+   - Merge the green PR, then push an annotated tag `vX.Y.Z` on the default branch.
+   - Confirm that all release workflows succeeded, run the universal workflow, then verify the assets.
+   - Document the process in `docs/RELEASING.md`.
+7. A Mac job that fails for runner capacity is not a code bug. Rerun it; don't change code.
+
+## Distribution
+- **Homebrew** (`pesty-sh/homebrew-tap`):
+  - Build from source only. No bottles and no prebuilt binaries.
+  - The formula `url` is the tag source tarball, with a `sha256` computed from a real download, checked twice.
+  - Use `depends_on "rust" => :build` and `system "cargo", "install", *std_cargo_args`.
+  - The test checks `--version`, plus a safe behaviour test such as a dry run.
+  - Run `brew style` and `brew audit --new` before the PR.
+- **apt** (`pesty-sh/apt`, GitHub Pages):
+  - Packages are signed and published by `publish.py` on Stuart's Mac. The GPG private key lives only there and must never leave it.
+  - Cloud agents cannot publish to apt. Prepare the `.deb` files, then hand off to Stuart.
+- **Windows:**
+  - Ship the zip. Note in the README that the unsigned binary triggers a SmartScreen warning.
+  - winget and Scoop come later.
+- **crates.io:** don't publish unless Stuart asks.
