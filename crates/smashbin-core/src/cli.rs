@@ -35,7 +35,10 @@ A smasher.json or smasher.yaml next to the image runs each job from top to botto
 -c names a smasher file that lives somewhere else.
 
 --format can write jpg, png, gif, webp, bmp, tif, tga, ico, qoi, ppm, hdr, or ff.
-This version does not pad a picture into a square."
+This version does not pad a picture into a square.
+
+smashbin batch --jobs gallery.yaml --out ./variants photo.jpg decodes once
+and writes every size in that file."
 )]
 pub struct Args {
     /// Show the flags. `-h` is height.
@@ -288,8 +291,7 @@ fn dot_relative(out: &Path) -> Option<&Path> {
 }
 
 fn out_is_folder(typed: &Path, resolved: &Path, many: bool) -> bool {
-    many
-        || resolved.is_dir()
+    many || resolved.is_dir()
         || (dot_relative(typed).is_some() && resolved.extension().is_none() && !resolved.exists())
 }
 
@@ -391,7 +393,12 @@ fn push_file_jobs(
         } else if args.replace {
             Dest::Replace(file.to_path_buf())
         } else if let Some(path) = &args.out {
-            dest_from_out(path, Some(file), name, args.files.len() > 1 || specs.len() > 1)?
+            dest_from_out(
+                path,
+                Some(file),
+                name,
+                args.files.len() > 1 || specs.len() > 1,
+            )?
         } else {
             Dest::Create(file.with_file_name(name))
         };
@@ -651,10 +658,7 @@ mod tests {
 
         let ext = Args::try_parse_from(["smashbin", "--format", "webp", "logo.jpg"]).unwrap();
         let jobs = super::jobs(&ext).unwrap();
-        assert_eq!(
-            jobs[0].dest_path(),
-            Some(Path::new("logo_strip_safe.webp"))
-        );
+        assert_eq!(jobs[0].dest_path(), Some(Path::new("logo_strip_safe.webp")));
     }
 
     #[test]

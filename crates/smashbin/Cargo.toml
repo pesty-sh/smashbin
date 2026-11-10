@@ -1,0 +1,25 @@
+[package]
+name = "smashbin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Offline image smasher. Strips metadata, resizes, and cuts one picture into many sizes."
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["jpeg", "png", "offline", "privacy", "image"]
+categories = ["command-line-utilities", "multimedia::images"]
+
+[dependencies]
+smashbin-core = { path = "../smashbin-core" }
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+predicates = "3.1.4"
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

@@ -43,12 +43,7 @@ pub struct OriginalDensity {
 /// # Errors
 ///
 /// A JPEG or PNG that should hold the density could not be read.
-pub fn apply(
-    bytes: &[u8],
-    ext: Option<Ext>,
-    kind: Kind,
-    dpi: u16,
-) -> Result<Outcome, SmashError> {
+pub fn apply(bytes: &[u8], ext: Option<Ext>, kind: Kind, dpi: u16) -> Result<Outcome, SmashError> {
     match ext {
         Some(Ext::Jpeg) => Ok(Outcome::Stored(jpeg(bytes, dpi)?)),
         Some(Ext::Png) => Ok(Outcome::Stored(png(bytes, dpi)?)),
@@ -104,15 +99,13 @@ fn jpeg(bytes: &[u8], dpi: u16) -> Result<Vec<u8>, SmashError> {
     let mut image = Jpeg::from_bytes(Bytes::copy_from_slice(bytes))
         .map_err(|error| SmashError::message(format!("this JPEG could not be read: {error}")))?;
     let segments = image.segments_mut();
-    let jfif = segments.iter().position(|segment| {
-        segment.marker() == 0xE0 && segment.contents().starts_with(b"JFIF\0")
-    });
+    let jfif = segments
+        .iter()
+        .position(|segment| segment.marker() == 0xE0 && segment.contents().starts_with(b"JFIF\0"));
     if let Some(index) = jfif {
         let old = segments[index].contents();
         if old.len() < 14 {
-            return Err(SmashError::message(
-                "this JPEG density header is cut off",
-            ));
+            return Err(SmashError::message("this JPEG density header is cut off"));
         }
         let mut next = old.to_vec();
         next[7] = 1;
@@ -282,9 +275,10 @@ fn write_chunk(out: &mut Vec<u8>, tag: [u8; 4], data: &[u8]) {
 
 fn jpeg_dpi(bytes: &[u8]) -> Option<OriginalDensity> {
     let image = Jpeg::from_bytes(Bytes::copy_from_slice(bytes)).ok()?;
-    let segment = image.segments().iter().find(|segment| {
-        segment.marker() == 0xE0 && segment.contents().starts_with(b"JFIF\0")
-    })?;
+    let segment = image
+        .segments()
+        .iter()
+        .find(|segment| segment.marker() == 0xE0 && segment.contents().starts_with(b"JFIF\0"))?;
     let contents = segment.contents();
     if contents.len() < 14 {
         return None;
@@ -308,7 +302,10 @@ fn dpcm_to_dpi(dots: u16) -> Option<u16> {
 
 fn png_dpi(bytes: &[u8]) -> Option<OriginalDensity> {
     let image = Png::from_bytes(Bytes::copy_from_slice(bytes)).ok()?;
-    let chunk = image.chunks().iter().find(|chunk| chunk.kind() == *b"pHYs")?;
+    let chunk = image
+        .chunks()
+        .iter()
+        .find(|chunk| chunk.kind() == *b"pHYs")?;
     let contents = chunk.contents();
     if contents.len() < 9 || contents[8] != 1 {
         return None;
@@ -356,10 +353,16 @@ mod tests {
             .encode(&[255, 0, 0], 1, 1, jpeg_encoder::ColorType::Rgb)
             .unwrap();
         let out = stored(&bytes, Kind::Jpeg, 300);
-        let start = out.windows(5).position(|window| window == *b"JFIF\0").unwrap();
+        let start = out
+            .windows(5)
+            .position(|window| window == *b"JFIF\0")
+            .unwrap();
         let pair = 300u16.to_be_bytes();
         assert_eq!(out[start + 7], 1);
-        assert_eq!(&out[start + 8..start + 12], &[pair[0], pair[1], pair[0], pair[1]]);
+        assert_eq!(
+            &out[start + 8..start + 12],
+            &[pair[0], pair[1], pair[0], pair[1]]
+        );
     }
 
     #[test]
@@ -402,12 +405,7 @@ mod tests {
         let mut raw = Vec::new();
         let image = image::RgbImage::from_pixel(1, 1, image::Rgb([1, 2, 3]));
         image::codecs::webp::WebPEncoder::new_lossless(&mut raw)
-            .write_image(
-                image.as_raw(),
-                1,
-                1,
-                image::ExtendedColorType::Rgb8,
-            )
+            .write_image(image.as_raw(), 1, 1, image::ExtendedColorType::Rgb8)
             .unwrap();
         let out = match apply(&raw, Some(crate::ext::Ext::Webp), Kind::Png, 72).unwrap() {
             Outcome::Stored(out) => out,

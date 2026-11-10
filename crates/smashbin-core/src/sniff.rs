@@ -9,6 +9,37 @@ use img_parts::Bytes;
 
 use crate::error::SmashError;
 
+/// The longest side this version will decode.
+pub(crate) const MAX_SIDE: u32 = 10_000;
+
+/// Stop before decode when the header claims more pixels than this.
+///
+/// 100 million pixels is a 10 000 by 10 000 picture, about 300 MB of RGB.
+/// A 25 MB gallery JPEG is under that. A decompression bomb is not: its
+/// header says it is enormous, and this check refuses it before the
+/// decoder allocates the picture.
+pub(crate) const MAX_PIXELS: u64 = 100_000_000;
+
+/// Refuse a header that is wider, taller, or larger than this version decodes.
+///
+/// # Errors
+///
+/// A side is over [`MAX_SIDE`], or the pixel count is over [`MAX_PIXELS`].
+pub(crate) fn pixel_budget(width: u32, height: u32) -> Result<(), SmashError> {
+    if width > MAX_SIDE || height > MAX_SIDE {
+        return Err(SmashError::message(format!(
+            "this image is {width} by {height}. This version stops at {MAX_SIDE} pixels on a side."
+        )));
+    }
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if pixels > MAX_PIXELS {
+        return Err(SmashError::message(format!(
+            "this image is {width} by {height}, which is {pixels} pixels. This version stops at {MAX_PIXELS} pixels before it decodes."
+        )));
+    }
+    Ok(())
+}
+
 /// A format this version can read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -80,6 +111,18 @@ pub fn sniff(bytes: &[u8]) -> Result<Picture, SmashError> {
 
 fn png_size(bytes: &[u8]) -> Result<(u32, u32), SmashError> {
     // signature (8) + length (4) + "IHDR" (4) + width (4) + height (4)
+    // The first chunk must be IHDR. A later chunk is not the size.
+    let length = bytes
+        .get(8..12)
+        .ok_or_else(|| SmashError::message("this PNG is cut off before its width and height"))?;
+    let kind = bytes
+        .get(12..16)
+        .ok_or_else(|| SmashError::message("this PNG is cut off before its width and height"))?;
+    if length != 13u32.to_be_bytes() || kind != b"IHDR" {
+        return Err(SmashError::message(
+            "this PNG does not start with its header",
+        ));
+    }
     let header = bytes
         .get(16..24)
         .ok_or_else(|| SmashError::message("this PNG is cut off before its width and height"))?;
@@ -115,4 +158,52 @@ fn nonzero(width: u32, height: u32) -> Result<(u32, u32), SmashError> {
         return Err(SmashError::message("the image width or height is zero"));
     }
     Ok((width, height))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::{sniff, Kind};
+
+    #[test]
+    fn a_text_file_is_none_of_the_three() {
+        let error = sniff(b"hello").unwrap_err();
+        assert!(error.to_string().contains("PNG, JPG, and GIF"));
+    }
+
+    #[test]
+    fn a_short_png_signature_has_no_size() {
+        let error = sniff(b"\x89PNG\r\n\x1a\n").unwrap_err();
+        assert!(error.to_string().contains("cut off"));
+    }
+
+    #[test]
+    fn a_gif_header_stores_width_then_height() {
+        let picture = sniff(b"GIF89a\x02\x00\x03\x00").unwrap();
+        assert_eq!(picture.kind, Kind::Gif);
+        assert_eq!((picture.width, picture.height), (2, 3));
+    }
+
+    #[test]
+    fn a_gif_with_a_zero_side_is_refused() {
+        let error = sniff(b"GIF87a\x00\x00\x01\x00").unwrap_err();
+        assert!(error.to_string().contains("zero"));
+    }
+
+    #[test]
+    fn a_png_must_start_with_ihdr() {
+        let mut bytes = vec![0u8; 24];
+        bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        bytes[12..16].copy_from_slice(b"tEXt");
+        bytes[16..20].copy_from_slice(&1u32.to_be_bytes());
+        bytes[20..24].copy_from_slice(&1u32.to_be_bytes());
+        let error = sniff(&bytes).unwrap_err();
+        assert!(error.to_string().contains("header"));
+    }
+
+    #[test]
+    fn a_side_longer_than_the_cap_is_refused() {
+        let error = super::pixel_budget(20_000, 1).unwrap_err();
+        assert!(error.to_string().contains("stops at"));
+    }
 }

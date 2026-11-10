@@ -11,8 +11,9 @@ target/
 # smashbin package output
 /dist/
 
-# local smashbin test images
+# local smashbin test images, including the 25 MB bench PNG
 /output/
+/output/bench.png
 
 # Editor and OS
 .DS_Store

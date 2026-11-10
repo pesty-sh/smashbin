@@ -1,0 +1,55 @@
+[package]
+name = "smashbin-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Library inside smashbin. Strips metadata, resizes, and cuts one picture into many sizes."
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["jpeg", "png", "offline", "privacy", "image"]
+categories = ["multimedia::images"]
+
+# These are compiled into the smashbin binary. None of them is C, and none of
+# them is a second program the user has to install.
+#   clap          reads the flags
+#   img-parts     lifts metadata out of a JPEG, PNG, or GIF container
+#   png           recompresses a PNG. Pure Rust. Pixels stay the same.
+#   image         reads pixels and resizes them. JPEG and GIF go through it.
+#                 `--format` also writes the pure-Rust formats listed below.
+#                 WebP is lossless. AVIF and lossy WebP need a C library, so
+#                 they are not enabled.
+#   jpeg-encoder  writes those pixels into a new JPEG
+[dependencies]
+clap = { version = "4.6.7", default-features = false, features = [
+    "std",
+    "help",
+    "usage",
+    "error-context",
+    "derive",
+] }
+image = { version = "0.25.10", default-features = false, features = [
+    "bmp",
+    "ff",
+    "gif",
+    "hdr",
+    "ico",
+    "jpeg",
+    "png",
+    "pnm",
+    "qoi",
+    "tga",
+    "tiff",
+    "webp",
+] }
+img-parts = { version = "0.4.2", default-features = false }
+jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
+png = "0.18.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

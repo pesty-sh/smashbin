@@ -6,12 +6,13 @@ alwaysApply: true
 
 # smashbin
 
-One Rust package named `smashbin` at the repo root.
+Cargo workspace at the repo root. `crates/smashbin-core` is the library. `crates/smashbin` is the binary named `smashbin`. They share `target/`.
 
 - `make` calls `~/.cargo/bin/cargo`. The Intel binary stays stamped macOS 10.12. `make` does not install. `make build-silicon` and `make build-windows` do not install. Windows uses `x86_64-pc-windows-gnu` and the MinGW linker.
 - `make deb` builds glibc 2.27 Linux binaries for amd64 and arm64 and a `.deb` for each. Docker is not used. Do not install those binaries over the Mac one.
 - The Homebrew formula is only in `/Users/developers/Projects/pesty-sh/homebrew-tap/Formula/smashbin.rb`. The apt repository is only in `/Users/developers/Projects/pesty-sh/apt`.
-- Version 0.1.5 sets width and height. One missing side keeps the aspect ratio. Both sides with a different aspect crop. `--cv` is top, middle, bottom, or 0 to 100 (0 is the bottom). `--ch` is left, middle, right, or 0 to 100. The slice stays inside the picture. `--dpi` sets the stored pixels per inch and does not move pixels. JPEG, PNG, and WebP store it. Other containers are still written, and stderr names the original density. `--format` / `-f` writes jpg, png, gif, webp, bmp, tif, tga, ico, qoi, ppm, hdr, or ff. WebP is lossless. Do not add AVIF or a C WebP encoder. It does not pad to a square. `--quality` and `--bytes` cannot be combined. They re-encode JPEG only, after the resize. A `smasher.json` or `smasher.yaml` next to the image runs each job top to bottom. `smasher.json` wins when both are present. `-c` selects another smasher file. Do not add a JSON, YAML, C, or `-sys` crate. PNG shrinking uses the pure-Rust `png` crate.
+- `smashbin batch` decodes once, fits each job with `cover` or `contain`, and encodes in parallel. A smasher file next to the image does not do this.
+- Version 0.1.6 sets width and height. One missing side keeps the aspect ratio. Both sides with a different aspect crop. `--cv` is top, middle, bottom, or 0 to 100 (0 is the bottom). `--ch` is left, middle, right, or 0 to 100. The slice stays inside the picture. `--dpi` sets the stored pixels per inch and does not move pixels. JPEG, PNG, and WebP store it. Other containers are still written, and stderr names the original density. `--format` / `-f` writes jpg, png, gif, webp, bmp, tif, tga, ico, qoi, ppm, hdr, or ff. WebP is lossless. Do not add AVIF or a C WebP encoder. It does not pad to a square. `--quality` and `--bytes` cannot be combined. They re-encode JPEG only, after the resize. A `smasher.json` or `smasher.yaml` next to the image runs each job top to bottom. `smasher.json` wins when both are present. `-c` selects another smasher file. Do not add a JSON, YAML, C, or `-sys` crate. PNG shrinking uses the pure-Rust `png` crate.
 - No telemetry, HTTP client, update checker, or image-content logging.
 
 Before build, install, or packaging work, read `.cursor/skills/smashbin/SKILL.md`.

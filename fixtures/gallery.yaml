@@ -1,0 +1,116 @@
+jobs:
+  - name: icon_24x24.jpg
+    width: 24
+    height: 24
+    quality: 84
+    fit: cover
+  - name: icon_42x42.jpg
+    width: 42
+    height: 42
+    quality: 84
+    fit: cover
+  - name: icon_52x52.jpg
+    width: 52
+    height: 52
+    quality: 84
+    fit: cover
+  - name: icon_64x64.jpg
+    width: 64
+    height: 64
+    quality: 84
+    fit: cover
+  - name: icon_128x128.jpg
+    width: 128
+    height: 128
+    quality: 84
+    fit: cover
+  - name: icon_144x144.jpg
+    width: 144
+    height: 144
+    quality: 84
+    fit: cover
+  - name: preview_56x56.jpg
+    width: 56
+    height: 56
+    quality: 84
+    fit: contain
+  - name: preview_260x260.jpg
+    width: 260
+    height: 260
+    quality: 84
+    fit: contain
+  - name: preview_280x280.jpg
+    width: 280
+    height: 280
+    quality: 84
+    fit: contain
+  - name: preview_420x420.jpg
+    width: 420
+    height: 420
+    quality: 90
+    fit: contain
+  - name: preview_500x500.jpg
+    width: 500
+    height: 500
+    quality: 84
+    fit: contain
+  - name: preview_820x860.jpg
+    width: 820
+    height: 860
+    quality: 84
+    fit: contain
+  - name: header_415x160.jpg
+    width: 415
+    height: 160
+    quality: 84
+    fit: cover
+  - name: header_720x280.jpg
+    width: 720
+    height: 280
+    quality: 84
+    fit: cover
+  - name: header_900x400.jpg
+    width: 900
+    height: 400
+    quality: 84
+    fit: cover
+  - name: header_1600x800.jpg
+    width: 1600
+    height: 800
+    quality: 84
+    fit: cover
+  - name: srcset_320.jpg
+    width: 320
+    height: 320
+    quality: 84
+    fit: contain
+  - name: srcset_480.jpg
+    width: 480
+    height: 480
+    quality: 84
+    fit: contain
+  - name: srcset_640.jpg
+    width: 640
+    height: 640
+    quality: 84
+    fit: contain
+  - name: srcset_900.jpg
+    width: 900
+    height: 900
+    quality: 84
+    fit: contain
+  - name: srcset_1200.jpg
+    width: 1200
+    height: 1200
+    quality: 84
+    fit: contain
+  - name: srcset_1600.jpg
+    width: 1600
+    height: 1600
+    quality: 84
+    fit: contain
+  - name: srcset_2400.jpg
+    width: 2400
+    height: 2400
+    quality: 84
+    fit: contain

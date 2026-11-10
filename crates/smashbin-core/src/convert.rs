@@ -51,9 +51,14 @@ fn encode_image(image: &DynamicImage, ext: Ext) -> Result<Vec<u8>, SmashError> {
     } else if ext == Ext::Farbfeld {
         write_farbfeld(&image.to_rgba16(), &mut cursor)?;
     } else {
-        image.write_to(&mut cursor, image_format(ext)).map_err(|error| {
-            SmashError::message(format!("this {} could not be written: {error}", ext.as_str()))
-        })?;
+        image
+            .write_to(&mut cursor, image_format(ext))
+            .map_err(|error| {
+                SmashError::message(format!(
+                    "this {} could not be written: {error}",
+                    ext.as_str()
+                ))
+            })?;
     }
     Ok(cursor.into_inner())
 }
@@ -90,7 +95,9 @@ fn write_farbfeld(
             rgba.height(),
             image::ExtendedColorType::Rgba16,
         )
-        .map_err(|error| SmashError::message(format!("this FARBFELD could not be written: {error}")))
+        .map_err(|error| {
+            SmashError::message(format!("this FARBFELD could not be written: {error}"))
+        })
 }
 
 fn write_jpeg(
@@ -129,8 +136,7 @@ fn decode(bytes: &[u8], jpeg: Option<&RgbImage>) -> Result<DynamicImage, SmashEr
     if let Some(rgb) = jpeg {
         return Ok(DynamicImage::ImageRgb8(rgb.clone()));
     }
-    image::load_from_memory(bytes)
-        .map_err(|error| SmashError::message(format!("this image could not be read: {error}")))
+    crate::lossy::decode_limited(bytes)
 }
 
 fn image_format(ext: Ext) -> ImageFormat {

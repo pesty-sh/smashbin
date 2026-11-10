@@ -12,7 +12,7 @@ use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 
 use crate::cli::Job;
 use crate::error::SmashError;
-use crate::sniff::{Kind, Picture};
+use crate::sniff::{self, Kind, Picture};
 
 /// How step 6 treated the file. The report prints this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,9 +111,56 @@ fn not_jpeg(kind: Kind, job: &Job) -> SmashError {
 }
 
 fn decode_rgb(bytes: &[u8]) -> Result<RgbImage, SmashError> {
-    let decoded = image::load_from_memory(bytes)
-        .map_err(|error| SmashError::message(format!("this JPEG could not be decoded: {error}")))?;
-    Ok(decoded.to_rgb8())
+    Ok(decode_limited(bytes)?.into_rgb8())
+}
+
+/// Decoder limits shared by every entrance. A header check runs first.
+/// These limits are the second gate, inside the decoder.
+#[must_use]
+pub(crate) fn image_limits() -> image::Limits {
+    let mut limits = image::Limits::no_limits();
+    limits.max_image_width = Some(sniff::MAX_SIDE);
+    limits.max_image_height = Some(sniff::MAX_SIDE);
+    limits.max_alloc = Some(sniff::MAX_PIXELS.saturating_mul(8));
+    limits
+}
+
+/// Decode one still picture with [`image_limits`].
+///
+/// # Errors
+///
+/// The bytes are not a picture this crate can decode, or they exceed the limits.
+pub(crate) fn decode_limited(bytes: &[u8]) -> Result<image::DynamicImage, SmashError> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| {
+            SmashError::message(format!("this image could not be decoded: {error}"))
+        })?;
+    reader.limits(image_limits());
+    reader.decode().map_err(|error| image_error(&error))
+}
+
+/// Refuse a decoder that advertises a buffer bigger than the pixel cap.
+///
+/// # Errors
+///
+/// `total_bytes` is over eight bytes per pixel at [`sniff::MAX_PIXELS`].
+pub(crate) fn within_alloc(total_bytes: u64) -> Result<(), SmashError> {
+    if total_bytes > sniff::MAX_PIXELS.saturating_mul(8) {
+        return Err(SmashError::message(
+            "this image asks for more memory than this version will use",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn image_error(error: &image::ImageError) -> SmashError {
+    let text = error.to_string();
+    if text.len() > 180 {
+        SmashError::message("this image could not be decoded")
+    } else {
+        SmashError::message(format!("this image could not be decoded: {text}"))
+    }
 }
 
 fn encode_jpeg(bytes: &[u8], quality: u8) -> Result<Vec<u8>, SmashError> {

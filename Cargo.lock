@@ -513,15 +513,24 @@ checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "smashbin"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "assert_cmd",
+ "image",
+ "predicates",
+ "smashbin-core",
+ "tempfile",
+]
+
+[[package]]
+name = "smashbin-core"
+version = "0.1.6"
+dependencies = [
  "clap",
  "image",
  "img-parts",
  "jpeg-encoder",
  "png",
- "predicates",
  "tempfile",
 ]
 

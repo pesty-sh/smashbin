@@ -14,7 +14,7 @@
 use std::io::Cursor;
 
 use image::imageops::FilterType;
-use image::{AnimationDecoder, RgbImage};
+use image::{AnimationDecoder, ImageDecoder, RgbImage};
 
 use crate::error::SmashError;
 use crate::lossy;
@@ -151,6 +151,109 @@ pub fn window(src_w: u32, src_h: u32, crop_w: u32, crop_h: u32, ch: u8, cv: u8) 
     }
 }
 
+/// The size of a `contain` cut. The whole picture stays inside the box.
+///
+/// One side equals the box. The other side is equal or shorter. Nothing is
+/// padded out to the box.
+///
+/// # Errors
+///
+/// A side is 0, or the rounded side would be above 65535.
+pub(crate) fn contain_size(
+    src_w: u32,
+    src_h: u32,
+    box_w: u32,
+    box_h: u32,
+) -> Result<Size, SmashError> {
+    if src_w == 0 || src_h == 0 || box_w == 0 || box_h == 0 {
+        return Err(SmashError::message("this image has a zero side"));
+    }
+    let src_w = u64::from(src_w);
+    let src_h = u64::from(src_h);
+    let box_w = u64::from(box_w);
+    let box_h = u64::from(box_h);
+    let (width, height) = if src_w * box_h >= src_h * box_w {
+        let height = (src_h * box_w + src_w / 2) / src_w;
+        (box_w, height.max(1).min(box_h))
+    } else {
+        let width = (src_w * box_h + src_h / 2) / src_h;
+        (width.max(1).min(box_w), box_h)
+    };
+    Ok(Size {
+        width: u32::try_from(width).unwrap_or(u32::MAX),
+        height: u32::try_from(height).unwrap_or(u32::MAX),
+    })
+}
+
+/// The source window for a `cover` cut, before it is scaled to the box.
+///
+/// The window has the box's aspect ratio and sits in the centre. Scaling
+/// that window is the same picture as scaling the whole photo and then
+/// throwing the edges away, and it moves fewer pixels.
+///
+/// # Errors
+///
+/// A side is 0.
+pub(crate) fn cover_window(
+    src_w: u32,
+    src_h: u32,
+    box_w: u32,
+    box_h: u32,
+) -> Result<Crop, SmashError> {
+    if src_w == 0 || src_h == 0 || box_w == 0 || box_h == 0 {
+        return Err(SmashError::message("this image has a zero side"));
+    }
+    let wide = u64::from(src_w);
+    let tall = u64::from(src_h);
+    let box_wide = u64::from(box_w);
+    let box_tall = u64::from(box_h);
+    let (crop_w, crop_h) = if wide * box_tall >= tall * box_wide {
+        let crop_w = (tall * box_wide / box_tall).clamp(1, wide);
+        (crop_w, tall)
+    } else {
+        let crop_h = (wide * box_tall / box_wide).clamp(1, tall);
+        (wide, crop_h)
+    };
+    let crop_w = u32::try_from(crop_w).unwrap_or(src_w).min(src_w);
+    let crop_h = u32::try_from(crop_h).unwrap_or(src_h).min(src_h);
+    Ok(window(src_w, src_h, crop_w, crop_h, 50, 50))
+}
+
+/// Scale `image` so it fits inside the box.
+///
+/// # Errors
+///
+/// A side is 0.
+pub(crate) fn contain_rgb(
+    image: &RgbImage,
+    width: u32,
+    height: u32,
+) -> Result<RgbImage, SmashError> {
+    let size = contain_size(image.width(), image.height(), width, height)?;
+    Ok(image::imageops::resize(
+        image,
+        size.width,
+        size.height,
+        FilterType::Lanczos3,
+    ))
+}
+
+/// Crop the centre to the box's aspect, then scale that window to the box.
+///
+/// # Errors
+///
+/// A side is 0.
+pub(crate) fn cover_rgb(image: &RgbImage, width: u32, height: u32) -> Result<RgbImage, SmashError> {
+    let crop = cover_window(image.width(), image.height(), width, height)?;
+    let view = image::imageops::crop_imm(image, crop.x, crop.y, crop.width, crop.height).to_image();
+    Ok(image::imageops::resize(
+        &view,
+        width,
+        height,
+        FilterType::Lanczos3,
+    ))
+}
+
 /// Resize `bytes` into `size` without changing the format.
 ///
 /// `keep_jpeg_file` writes the JPEG at quality 100. Pass false when
@@ -255,8 +358,7 @@ fn other_side(src_known: u32, src_other: u32, new_known: u32) -> Result<u32, Sma
 }
 
 fn scale_jpeg(bytes: &[u8], picture: Picture, keep_jpeg_file: bool) -> Result<Scaled, SmashError> {
-    let decoded = image::load_from_memory(bytes)
-        .map_err(|error| SmashError::message(format!("this JPEG could not be decoded: {error}")))?;
+    let decoded = lossy::decode_limited(bytes)?;
     let rgb = image::imageops::resize(
         &decoded.to_rgb8(),
         picture.width,
@@ -276,7 +378,8 @@ fn scale_jpeg(bytes: &[u8], picture: Picture, keep_jpeg_file: bool) -> Result<Sc
 }
 
 fn scale_png(bytes: &[u8], picture: &Picture, size: Size) -> Result<Vec<u8>, SmashError> {
-    let mut decoder = png::Decoder::new(Cursor::new(bytes));
+    let cap = usize::try_from(crate::sniff::MAX_PIXELS.saturating_mul(4)).unwrap_or(usize::MAX);
+    let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: cap });
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder
         .read_info()
@@ -295,6 +398,11 @@ fn scale_png(bytes: &[u8], picture: &Picture, size: Size) -> Result<Vec<u8>, Sma
     let buffer_size = reader.output_buffer_size().ok_or_else(|| {
         SmashError::message("this PNG is larger than this version will decompress")
     })?;
+    if buffer_size > cap {
+        return Err(SmashError::message(
+            "this PNG is larger than this version will decompress",
+        ));
+    }
     let mut pixels = vec![0; buffer_size];
     let written = reader
         .next_frame(&mut pixels)
@@ -336,10 +444,10 @@ fn crop_jpeg(
     picture: Picture,
     keep_jpeg_file: bool,
 ) -> Result<Scaled, SmashError> {
-    let decoded = image::load_from_memory(bytes)
-        .map_err(|error| SmashError::message(format!("this JPEG could not be decoded: {error}")))?;
-    let rgb = image::imageops::crop_imm(&decoded.to_rgb8(), crop.x, crop.y, crop.width, crop.height)
-        .to_image();
+    let decoded = lossy::decode_limited(bytes)?;
+    let rgb =
+        image::imageops::crop_imm(&decoded.to_rgb8(), crop.x, crop.y, crop.width, crop.height)
+            .to_image();
     let bytes = if keep_jpeg_file {
         lossy::encode_rgb(&rgb, 100)?
     } else {
@@ -353,7 +461,8 @@ fn crop_jpeg(
 }
 
 fn crop_png(bytes: &[u8], picture: &Picture, crop: Crop) -> Result<Vec<u8>, SmashError> {
-    let mut decoder = png::Decoder::new(Cursor::new(bytes));
+    let cap = usize::try_from(crate::sniff::MAX_PIXELS.saturating_mul(4)).unwrap_or(usize::MAX);
+    let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: cap });
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder
         .read_info()
@@ -372,6 +481,11 @@ fn crop_png(bytes: &[u8], picture: &Picture, crop: Crop) -> Result<Vec<u8>, Smas
     let buffer_size = reader.output_buffer_size().ok_or_else(|| {
         SmashError::message("this PNG is larger than this version will decompress")
     })?;
+    if buffer_size > cap {
+        return Err(SmashError::message(
+            "this PNG is larger than this version will decompress",
+        ));
+    }
     let mut pixels = vec![0; buffer_size];
     let written = reader
         .next_frame(&mut pixels)
@@ -416,16 +530,39 @@ where
         .into_raw()
 }
 
-fn crop_gif(bytes: &[u8], crop: Crop) -> Result<Vec<u8>, SmashError> {
-    let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes))
+fn gif_frames(bytes: &[u8]) -> Result<Vec<image::Frame>, SmashError> {
+    let mut decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes))
         .map_err(|error| SmashError::message(format!("this GIF could not be read: {error}")))?;
-    let frames = decoder
-        .into_frames()
-        .collect_frames()
-        .map_err(|error| SmashError::message(format!("this GIF could not be read: {error}")))?;
+    decoder
+        .set_limits(lossy::image_limits())
+        .map_err(|error| lossy::image_error(&error))?;
+    let mut frames = Vec::new();
+    let mut pixels = 0u64;
+    for frame in decoder.into_frames() {
+        let frame = frame.map_err(|error| lossy::image_error(&error))?;
+        let (width, height) = frame.buffer().dimensions();
+        charge_pixels(&mut pixels, width, height)?;
+        frames.push(frame);
+    }
     if frames.is_empty() {
         return Err(SmashError::message("this GIF has no frames"));
     }
+    Ok(frames)
+}
+
+fn charge_pixels(total: &mut u64, width: u32, height: u32) -> Result<(), SmashError> {
+    let next = total.saturating_add(u64::from(width).saturating_mul(u64::from(height)));
+    if next > crate::sniff::MAX_PIXELS {
+        return Err(SmashError::message(
+            "this GIF has more picture data than this version will decode",
+        ));
+    }
+    *total = next;
+    Ok(())
+}
+
+fn crop_gif(bytes: &[u8], crop: Crop) -> Result<Vec<u8>, SmashError> {
+    let frames = gif_frames(bytes)?;
     let mut out = Vec::new();
     {
         let mut encoder = image::codecs::gif::GifEncoder::new_with_speed(&mut out, 10);
@@ -481,15 +618,7 @@ fn write_png(pixels: &[u8], size: Size, color: png::ColorType) -> Result<Vec<u8>
 }
 
 fn scale_gif(bytes: &[u8], size: Size) -> Result<Vec<u8>, SmashError> {
-    let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes))
-        .map_err(|error| SmashError::message(format!("this GIF could not be read: {error}")))?;
-    let frames = decoder
-        .into_frames()
-        .collect_frames()
-        .map_err(|error| SmashError::message(format!("this GIF could not be read: {error}")))?;
-    if frames.is_empty() {
-        return Err(SmashError::message("this GIF has no frames"));
-    }
+    let frames = gif_frames(bytes)?;
     let mut out = Vec::new();
     {
         let mut encoder = image::codecs::gif::GifEncoder::new_with_speed(&mut out, 10);
@@ -517,7 +646,7 @@ fn scale_gif(bytes: &[u8], size: Size) -> Result<Vec<u8>, SmashError> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::{fit, plan, target, window, Geom};
+    use super::{contain_size, cover_window, fit, plan, target, window, Geom};
     use crate::sniff::{Kind, Picture};
 
     #[test]
@@ -530,6 +659,13 @@ mod tests {
         assert_eq!((size.width, size.height), (50, 25));
         let size = fit(3, 2, Some(2), None).unwrap().unwrap();
         assert_eq!((size.width, size.height), (2, 1));
+    }
+
+    #[test]
+    fn gif_frames_stop_at_the_pixel_budget() {
+        let mut total = crate::sniff::MAX_PIXELS;
+        let error = super::charge_pixels(&mut total, 1, 1).unwrap_err();
+        assert!(error.to_string().contains("picture data"));
     }
 
     #[test]
@@ -593,5 +729,23 @@ mod tests {
         let over = window(1024, 1024, 2000, 256, 100, 50);
         assert_eq!(over.width, 1024);
         assert_eq!(over.x, 0);
+    }
+
+    #[test]
+    fn contain_keeps_a_wide_picture_inside_the_box() {
+        let size = contain_size(4, 2, 820, 860).unwrap();
+        assert_eq!((size.width, size.height), (820, 410));
+        let square = contain_size(4, 2, 56, 56).unwrap();
+        assert_eq!((square.width, square.height), (56, 28));
+    }
+
+    #[test]
+    fn cover_crops_the_centre_of_a_wide_picture() {
+        let crop = cover_window(4, 2, 2, 2).unwrap();
+        assert_eq!((crop.x, crop.y, crop.width, crop.height), (1, 0, 2, 2));
+        let wide = cover_window(1024, 1024, 415, 160).unwrap();
+        assert_eq!(wide.width, 1024);
+        assert!(wide.height < 1024);
+        assert_eq!(wide.x, 0);
     }
 }

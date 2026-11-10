@@ -1,4 +1,14 @@
-//! smashbin reads an image and writes a smaller one.
+//! smashbin-core is the library. The `smashbin` program starts it.
+//!
+//! A workspace is one Cargo project that holds more than one crate. This
+//! crate has no `main`, so typing its name in a shell does nothing. The
+//! binary crate in `crates/smashbin` calls [`start`] and returns that exit
+//! code to the shell.
+//!
+//! The command-line types live in this crate. Strip, resize, and write use
+//! the job those types describe. If the types lived in the binary, this
+//! library would have to depend on the binary. Cargo does not allow that
+//! loop. A later program can call this library and skip the command line.
 //!
 //! Open the other files in this order. Each one does a single job:
 //!
@@ -13,9 +23,11 @@
 //! 9. [`density`] — `--dpi` writes the stored pixels per inch
 //! 10. [`write`] — the bytes go to a file or to stdout
 //!
-//! This file is the only place those steps are called, and they are called
-//! in that order. Version 0.1.5 does not pad to a square.
+//! [`smash_one`] calls those steps for one ordinary command.
+//! [`batch`] is the other entrance. It decodes once, then writes every size.
+//! Version 0.1.6 does not pad to a square.
 
+mod batch;
 mod cli;
 mod config;
 mod convert;
@@ -35,7 +47,22 @@ use std::process::ExitCode;
 use cli::Args;
 use error::SmashError;
 
-fn main() -> ExitCode {
+/// Start the command-line program.
+///
+/// The binary calls this and returns the same code. Exit 0 means the image
+/// was written. Exit 1 means a file or a flag failed. The message is
+/// already printed.
+#[must_use]
+pub fn start() -> ExitCode {
+    if batch::requested() {
+        return match batch::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("smashbin error: {error}");
+                ExitCode::from(1)
+            }
+        };
+    }
     let args = cli::parse_args();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
@@ -61,6 +88,7 @@ fn smash_one(job: &cli::Job) -> Result<(), SmashError> {
     let input = read::load(job.source.as_deref())?;
     // 2. What kind of image is this?
     let source = sniff::sniff(&input.bytes)?;
+    sniff::pixel_budget(source.width, source.height)?;
     let changing = job.ext.is_some_and(|ext| !ext.same_as(source.kind));
     if changing
         && job.ext != Some(ext::Ext::Jpeg)
@@ -86,23 +114,32 @@ fn smash_one(job: &cli::Job) -> Result<(), SmashError> {
     let (working, picture, jpeg, base) = match geom {
         Some(resize::Geom::Scale(size)) => {
             let scaled = resize::scale(&stripped, &source, size, keep_jpeg_file)?;
-            (scaled.bytes, scaled.picture, scaled.jpeg, lossy::How::Resize)
+            (
+                scaled.bytes,
+                scaled.picture,
+                scaled.jpeg,
+                lossy::How::Resize,
+            )
         }
         Some(resize::Geom::Crop(crop)) => {
             let cropped = resize::crop(&stripped, &source, crop, keep_jpeg_file)?;
-            (cropped.bytes, cropped.picture, cropped.jpeg, lossy::How::Crop)
+            (
+                cropped.bytes,
+                cropped.picture,
+                cropped.jpeg,
+                lossy::How::Crop,
+            )
         }
         None => (stripped, source, None, lossy::How::Lossless),
     };
     let changed = geom.is_some();
     // 5. Shrink the resized file. A quality override encodes the pixels below.
-    let lossless_bytes = if changing
-        || (changed && picture.kind == sniff::Kind::Jpeg && job.quality.is_some())
-    {
-        Vec::new()
-    } else {
-        lossless::shrink(&working, &picture)?
-    };
+    let lossless_bytes =
+        if changing || (changed && picture.kind == sniff::Kind::Jpeg && job.quality.is_some()) {
+            Vec::new()
+        } else {
+            lossless::shrink(&working, &picture)?
+        };
     // 6. Quality or a byte cap replaces step 5 when one of those flags was typed.
     let (finished, how) = if changing {
         convert::apply(&working, &picture, job, changed, jpeg.as_ref())?

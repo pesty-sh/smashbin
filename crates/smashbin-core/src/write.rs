@@ -6,9 +6,9 @@
 //! left in place. `--replace` swaps it only when the new file is smaller.
 //! Missing folders in an output path are created.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::cli::{Dest, Job};
 use crate::error::SmashError;
@@ -51,7 +51,7 @@ pub fn emit(
                     fs::create_dir_all(parent)?;
                 }
             }
-            fs::write(path, finished)?;
+            write_replacing(path, finished)?;
             (finished.len(), false)
         }
         Dest::Replace(path) => replace_if_smaller(path, input.bytes.len(), finished)?,
@@ -80,9 +80,69 @@ fn replace_if_smaller(
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(".smashbin-tmp");
     let temporary = Path::new(&temporary);
-    fs::write(temporary, finished)?;
+    write_exclusive(temporary, finished)?;
     fs::rename(temporary, path)?;
     Ok((finished.len(), false))
+}
+
+/// Write `bytes` to `path`. An existing symlink is replaced, not followed.
+///
+/// The bytes land in a new file in the same directory, then that name is
+/// renamed onto `path`. Rename replaces a directory entry. It does not open
+/// a symlink and write through it.
+///
+/// # Errors
+///
+/// The directory is missing, or a partial file is already a symlink.
+pub(crate) fn write_replacing(path: &Path, bytes: &[u8]) -> Result<(), SmashError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| SmashError::message("the output needs a file name"))?;
+    let mut partial_name = std::ffi::OsString::from(".smashbin-");
+    partial_name.push(std::process::id().to_string());
+    partial_name.push("-");
+    partial_name.push(file_name);
+    partial_name.push(".partial");
+    let partial = if parent.as_os_str().is_empty() {
+        PathBuf::from(partial_name)
+    } else {
+        parent.join(partial_name)
+    };
+    write_exclusive(&partial, bytes).map_err(|error| {
+        SmashError::message(format!("could not write {}: {error}", path.display()))
+    })?;
+    if let Err(error) = fs::rename(&partial, path) {
+        let _ = fs::remove_file(&partial);
+        return Err(SmashError::message(format!(
+            "could not write {}: {error}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn write_exclusive(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    match create_new(path, bytes) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let meta = fs::symlink_metadata(path)?;
+            if meta.file_type().is_symlink() || !meta.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "refusing to follow a link in the output folder",
+                ));
+            }
+            fs::remove_file(path)?;
+            create_new(path, bytes)
+        }
+        other => other,
+    }
+}
+
+fn create_new(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    file.write_all(bytes)?;
+    Ok(())
 }
 
 fn report(
@@ -120,5 +180,28 @@ fn report(
         if !kept_original {
             eprintln!("{note}");
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use super::write_replacing;
+
+    #[test]
+    fn a_symlink_is_replaced_and_the_target_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("secret.txt");
+        std::fs::write(&secret, b"keep").unwrap();
+        let link = dir.path().join("cut.jpg");
+        symlink(&secret, &link).unwrap();
+        write_replacing(&link, b"jpeg-bytes").unwrap();
+        assert_eq!(std::fs::read(&secret).unwrap(), b"keep");
+        let meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(meta.is_file());
+        assert!(!meta.file_type().is_symlink());
+        assert_eq!(std::fs::read(&link).unwrap(), b"jpeg-bytes");
     }
 }

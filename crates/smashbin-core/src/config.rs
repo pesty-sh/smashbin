@@ -41,6 +41,34 @@ pub struct Spec {
     pub bytes: Option<String>,
 }
 
+/// How a batch cut meets its box.
+///
+/// `cover` fills the box and crops the extra from the centre.
+/// `contain` keeps the whole picture inside the box. One side matches
+/// the box. The other side is equal or shorter. The file is not padded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Fit {
+    /// Exact width and height. Extra pixels are cropped from the centre.
+    Cover,
+    /// The whole picture, scaled to fit inside the box.
+    Contain,
+}
+
+/// One cut in a batch file. Every field is required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BatchJob {
+    /// File name written inside `--out`. Not a path.
+    pub name: String,
+    /// Box width in pixels.
+    pub width: u32,
+    /// Box height in pixels.
+    pub height: u32,
+    /// JPEG quality, from 1 to 100.
+    pub quality: u8,
+    /// `cover` or `contain`.
+    pub fit: Fit,
+}
+
 /// Read a `.json`, `.yaml`, or `.yml` smasher file.
 ///
 /// # Errors
@@ -63,6 +91,34 @@ pub fn load(path: &Path) -> Result<Vec<Spec>, SmashError> {
     let value =
         parsed.map_err(|error| SmashError::message(format!("{}: {error}", path.display())))?;
     specs(value).map_err(|error| SmashError::message(format!("{}: {error}", path.display())))
+}
+
+/// Read a batch file. The shape is a `jobs` list, same as a smasher file.
+///
+/// Each job must set `name`, `width`, `height`, `quality`, and `fit`.
+/// A smasher file does not accept `name` or `fit`. This reader does not
+/// accept the other smasher fields.
+///
+/// # Errors
+///
+/// The file is missing, the text is not JSON or YAML, or a job field is wrong.
+pub(crate) fn load_batch(path: &Path) -> Result<Vec<BatchJob>, SmashError> {
+    let text = fs::read_to_string(path).map_err(|error| {
+        SmashError::message(format!("could not read {}: {error}", path.display()))
+    })?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let kind = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase);
+    let parsed = match kind.as_deref() {
+        Some("json") => parse_json(text),
+        Some("yaml" | "yml") => parse_yaml(text),
+        _ => Err("a batch file ends in .json or .yaml".to_owned()),
+    };
+    let value =
+        parsed.map_err(|error| SmashError::message(format!("{}: {error}", path.display())))?;
+    batch_jobs(value).map_err(|error| SmashError::message(format!("{}: {error}", path.display())))
 }
 
 /// The first file that exists wins: `smasher.json`, then `smasher.yaml`, then `smasher.yml`.
@@ -101,6 +157,189 @@ fn specs(value: Value) -> Result<Vec<Spec>, String> {
         .enumerate()
         .map(|(index, value)| one_job(index, value))
         .collect()
+}
+
+/// One batch file holds at most this many cuts. Each cut is one thread.
+const MAX_JOBS: usize = 64;
+
+/// One cut is at most this many pixels. The gallery's largest box is 2400 by 2400.
+const MAX_CUT_PIXELS: u64 = 8_000_000;
+
+fn batch_jobs(value: Value) -> Result<Vec<BatchJob>, String> {
+    let jobs = match value {
+        Value::Array(items) => items,
+        Value::Object(pairs) => jobs_field(pairs)?,
+        _ => return Err("the batch file needs a jobs list".to_owned()),
+    };
+    if jobs.is_empty() {
+        return Err("the batch file has no jobs".to_owned());
+    }
+    let jobs = jobs
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| one_batch_job(index, value))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut seen = Vec::new();
+    for job in &jobs {
+        if seen.iter().any(|name: &String| name == &job.name) {
+            return Err(format!("two jobs use the name {}", job.name));
+        }
+        seen.push(job.name.clone());
+    }
+    if jobs.len() > MAX_JOBS {
+        return Err(format!(
+            "this batch has {} cuts. This version stops at {MAX_JOBS}.",
+            jobs.len()
+        ));
+    }
+    Ok(jobs)
+}
+
+fn one_batch_job(index: usize, value: Value) -> Result<BatchJob, String> {
+    let Value::Object(pairs) = value else {
+        return Err(format!("job {} must be a set of fields", index + 1));
+    };
+    let mut name = None;
+    let mut width = None;
+    let mut height = None;
+    let mut quality = None;
+    let mut fit = None;
+    let mut seen = Vec::new();
+    for (key, value) in pairs {
+        if seen.iter().any(|existing: &String| existing == &key) {
+            return Err(format!("job {} has a duplicate field `{key}`", index + 1));
+        }
+        seen.push(key.clone());
+        if value == Value::Null {
+            continue;
+        }
+        match key.as_str() {
+            "name" => name = Some(batch_name(index, value)?),
+            "width" => width = Some(whole(index, "width", value, 1, 65_535)?),
+            "height" => height = Some(whole(index, "height", value, 1, 65_535)?),
+            "quality" => {
+                quality = Some(
+                    u8::try_from(whole(index, "quality", value, 1, 100)?).map_err(|_| {
+                        format!("job {} quality needs a number from 1 to 100", index + 1)
+                    })?,
+                );
+            }
+            "fit" => fit = Some(fit_value(index, value)?),
+            other => {
+                return Err(format!(
+                    "job {n} has an unknown field `{other}`. A batch job uses name, width, height, quality, and fit.",
+                    n = index + 1
+                ));
+            }
+        }
+    }
+    let job = BatchJob {
+        name: name.ok_or_else(|| format!("job {} needs a name", index + 1))?,
+        width: width.ok_or_else(|| format!("job {} needs a width", index + 1))?,
+        height: height.ok_or_else(|| format!("job {} needs a height", index + 1))?,
+        quality: quality.ok_or_else(|| format!("job {} needs a quality", index + 1))?,
+        fit: fit.ok_or_else(|| format!("job {} needs a fit", index + 1))?,
+    };
+    let pixels = u64::from(job.width).saturating_mul(u64::from(job.height));
+    if pixels > MAX_CUT_PIXELS {
+        return Err(format!(
+            "job {} is {} by {}, which is {pixels} pixels. One cut stops at {MAX_CUT_PIXELS} pixels.",
+            index + 1,
+            job.width,
+            job.height
+        ));
+    }
+    Ok(job)
+}
+
+fn batch_name(index: usize, value: Value) -> Result<String, String> {
+    let Value::String(name) = value else {
+        return Err(format!("job {} name is a file name", index + 1));
+    };
+    if !safe_cut_name(&name) {
+        return Err(format!(
+            "job {} name is a file name inside --out, not a path",
+            index + 1
+        ));
+    }
+    Ok(name)
+}
+
+/// A single `name.jpg` in the output folder. No directories, devices, or extra suffixes.
+fn safe_cut_name(name: &str) -> bool {
+    if !(5..=80).contains(&name.len()) || name.contains("..") {
+        return false;
+    }
+    let path = std::path::Path::new(name);
+    if path
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty())
+    {
+        return false;
+    }
+    if path
+        .extension()
+        .is_none_or(|ext| !ext.eq_ignore_ascii_case("jpg"))
+    {
+        return false;
+    }
+    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    let Some(first) = stem.as_bytes().first() else {
+        return false;
+    };
+    if !first.is_ascii_alphanumeric() {
+        return false;
+    }
+    if !stem
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return false;
+    }
+    let head = stem.split('.').next().unwrap_or(stem);
+    !reserved_device(head)
+}
+
+fn reserved_device(stem: &str) -> bool {
+    let stem = stem.to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+fn fit_value(index: usize, value: Value) -> Result<Fit, String> {
+    let Value::String(text) = value else {
+        return Err(format!("job {} fit is cover or contain", index + 1));
+    };
+    match text.to_ascii_lowercase().as_str() {
+        "cover" => Ok(Fit::Cover),
+        "contain" => Ok(Fit::Contain),
+        _ => Err(format!("job {} fit is cover or contain", index + 1)),
+    }
 }
 
 fn jobs_field(pairs: Vec<(String, Value)>) -> Result<Vec<Value>, String> {
@@ -144,9 +383,11 @@ fn one_job(index: usize, value: Value) -> Result<Spec, String> {
             "cv" => spec.cv = Some(align_value(index, "cv", value, true)?),
             "ch" => spec.ch = Some(align_value(index, "ch", value, false)?),
             "dpi" => {
-                spec.dpi = Some(u16::try_from(whole(index, "dpi", value, 1, 65_535)?).map_err(
-                    |_| format!("job {} dpi needs a number from 1 to 65535", index + 1),
-                )?);
+                spec.dpi = Some(
+                    u16::try_from(whole(index, "dpi", value, 1, 65_535)?).map_err(|_| {
+                        format!("job {} dpi needs a number from 1 to 65535", index + 1)
+                    })?,
+                );
             }
             "format" | "ext" => {
                 if spec.ext.is_some() {
@@ -649,7 +890,9 @@ fn yaml_double(text: &str) -> Result<String, String> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::{parse_json, parse_yaml, specs};
+    use std::fmt::Write;
+
+    use super::{batch_jobs, parse_json, parse_yaml, specs, Fit};
     use crate::cli::Strip;
 
     #[test]
@@ -687,5 +930,81 @@ mod tests {
         let jobs = specs(parse_json(r#"[{"height":128}]"#).unwrap()).unwrap();
         assert_eq!(jobs[0].height, Some(128));
         assert!(jobs[0].strip.is_none());
+    }
+
+    #[test]
+    fn a_smasher_file_rejects_fit_and_name() {
+        let error = specs(parse_json(r#"{"jobs":[{"fit":"cover","name":"a.jpg"}]}"#).unwrap());
+        assert!(error.unwrap_err().contains("unknown field"));
+    }
+
+    #[test]
+    fn a_batch_list_requires_every_cut_field() {
+        let jobs = batch_jobs(parse_yaml(
+            "jobs:\n  - name: icon_24x24.jpg\n    width: 24\n    height: 24\n    quality: 84\n    fit: cover\n",
+        ).unwrap())
+        .unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].fit, Fit::Cover);
+        assert_eq!(jobs[0].quality, 84);
+        let missing = batch_jobs(parse_json(r#"{"jobs":[{"name":"a.jpg"}]}"#).unwrap());
+        assert!(missing.unwrap_err().contains("needs a width"));
+    }
+
+    #[test]
+    fn the_gallery_files_list_the_same_23_cuts() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let yaml = super::load_batch(&root.join("gallery.yaml")).unwrap();
+        let json = super::load_batch(&root.join("gallery.json")).unwrap();
+        assert_eq!(yaml.len(), 23);
+        assert_eq!(yaml, json);
+        assert_eq!(yaml[9].name, "preview_420x420.jpg");
+        assert_eq!(yaml[9].quality, 90);
+        assert_eq!(yaml[9].fit, Fit::Contain);
+        assert_eq!(yaml[22].name, "srcset_2400.jpg");
+    }
+
+    #[test]
+    fn a_cut_name_cannot_leave_the_output_folder() {
+        for name in [
+            "../x.jpg",
+            "a/b.jpg",
+            ".htaccess",
+            "shell.php",
+            "CON.jpg",
+            "foo:bar.jpg",
+        ] {
+            let body = format!(
+                r#"{{"jobs":[{{"name":{name:?},"width":8,"height":8,"quality":84,"fit":"cover"}}]}}"#
+            );
+            let error = batch_jobs(parse_json(&body).unwrap()).unwrap_err();
+            assert!(
+                error.contains("file name"),
+                "{name} should be refused, got {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_batch_refuses_too_many_cuts_and_a_huge_box() {
+        let mut jobs = String::from("{\"jobs\":[");
+        for index in 0..65 {
+            if index > 0 {
+                jobs.push(',');
+            }
+            let _ = write!(
+                jobs,
+                r#"{{"name":"c{index}.jpg","width":8,"height":8,"quality":84,"fit":"cover"}}"#
+            );
+        }
+        jobs.push_str("]}");
+        let error = batch_jobs(parse_json(&jobs).unwrap()).unwrap_err();
+        assert!(error.contains("stops at"));
+        let huge = batch_jobs(parse_json(
+            r#"{"jobs":[{"name":"big.jpg","width":3000,"height":3000,"quality":84,"fit":"cover"}]}"#,
+        )
+        .unwrap())
+        .unwrap_err();
+        assert!(huge.contains("stops at"));
     }
 }

@@ -2,6 +2,13 @@
 
 smashbin is MIT licensed. The terms are in [LICENSE](LICENSE). Copyright (c) 2026 Stuart.
 
+## 0.1.6
+
+- `smashbin batch --jobs FILE --out DIR IMAGE` decodes the image once and writes every size. `fit` is `cover` or `contain`. The JPEGs are encoded in parallel. A `smasher.json` next to the image does not run this path.
+- `smashbin batch --verbose` prints the version, the library name, the pixel cap, and the read, decode, encode, and write clocks.
+- Batch writes a JPEG only after a check that it holds picture data. EXIF, XMP, comments, color profiles, and bytes after the end marker are refused.
+- A file over 64 MB, a side over 10 000 pixels, or a picture over 100 million pixels is refused before the pixels are decoded. One batch holds at most 64 cuts, and one cut is at most 8 million pixels. A cut name stays inside `--out`. A symlink there is replaced, not followed.
+
 ## 0.1.5
 
 - `--format` / `-f` writes `jpg`, `png`, `gif`, `webp`, `bmp`, `tif`, `tga`, `ico`, `qoi`, `ppm`, `hdr`, or `ff`. WebP is lossless. This flag was `--ext` / `-e`.

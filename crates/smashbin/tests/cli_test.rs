@@ -13,7 +13,7 @@ fn smashbin() -> Command {
 }
 
 fn logo() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/logo.jpg")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/logo.jpg")
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn binary_does_not_phone_home() {
         "ureq",
     ] {
         assert!(
-            !contains_ascii_ignore_case(&bytes, tracker),
+            !contains_marker(&bytes, tracker),
             "smashbin contains tracker marker {tracker}"
         );
     }
@@ -363,7 +363,8 @@ fn a_mismatched_size_crops_from_the_centre() {
         .success()
         .stderr(predicate::str::contains("crop"))
         .stderr(predicate::str::contains("4x2"));
-    let bytes = std::fs::read(dir.path().join("square_strip_safe_width_4_height_2.png")).expect("crop");
+    let bytes =
+        std::fs::read(dir.path().join("square_strip_safe_width_4_height_2.png")).expect("crop");
     let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(bytes)).expect("png");
     assert_eq!(decoder.dimensions(), (4, 2));
 }
@@ -380,7 +381,8 @@ fn cv_top_sits_at_the_top() {
         .success()
         .stderr(predicate::str::contains("crop"))
         .stderr(predicate::str::contains("2x1"));
-    let bytes = std::fs::read(dir.path().join("tall_strip_safe_height_1_cv_top.png")).expect("crop");
+    let bytes =
+        std::fs::read(dir.path().join("tall_strip_safe_height_1_cv_top.png")).expect("crop");
     let image = image::load_from_memory(&bytes).expect("png");
     assert_eq!(image.to_rgb8().get_pixel(0, 0), &image::Rgb([255, 0, 0]));
 }
@@ -437,8 +439,7 @@ fn dpi_is_stored_and_the_pixels_stay() {
         &bytes[start + 8..start + 12],
         &[pair[0], pair[1], pair[0], pair[1]]
     );
-    let decoder =
-        image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).expect("jpeg");
+    let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).expect("jpeg");
     assert_eq!(decoder.dimensions(), (4, 2));
 }
 
@@ -503,6 +504,96 @@ fn quality_does_not_mix_with_a_png_ext() {
 }
 
 #[test]
+fn a_text_file_is_not_an_image() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, b"hello").expect("notes");
+    smashbin()
+        .arg(&path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("PNG, JPG, and GIF"));
+}
+
+#[test]
+fn a_header_wider_than_the_cap_is_refused() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("wide.png");
+    let mut bytes = vec![0u8; 26];
+    bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+    bytes[8..12].copy_from_slice(&13u32.to_be_bytes());
+    bytes[12..16].copy_from_slice(b"IHDR");
+    bytes[16..20].copy_from_slice(&20_000u32.to_be_bytes());
+    bytes[20..24].copy_from_slice(&1u32.to_be_bytes());
+    std::fs::write(&path, &bytes).expect("header");
+    smashbin()
+        .arg(&path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("stops at"));
+}
+
+#[test]
+fn an_empty_file_is_refused() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("empty.jpg");
+    std::fs::write(&path, b"").expect("empty");
+    smashbin()
+        .arg(&path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("the input is empty"));
+}
+
+#[test]
+fn empty_stdin_is_refused() {
+    smashbin()
+        .write_stdin(Vec::<u8>::new())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("the input is empty"));
+}
+
+#[test]
+fn a_missing_file_is_refused() {
+    smashbin()
+        .arg("no-such-image.jpg")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("could not read or write the file"));
+}
+
+#[test]
+fn ch_needs_a_width() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    smashbin()
+        .arg(logo())
+        .arg("--ch")
+        .arg("left")
+        .arg("--out")
+        .arg(dir.path().join("out.jpg"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--ch needs --width"));
+}
+
+#[test]
+fn stdin_png_is_written_to_stdout() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("tiny.png");
+    write_png_rgb(&source, 2, 2);
+    let bytes = std::fs::read(&source).expect("tiny png");
+    let output = smashbin()
+        .arg("--stdout")
+        .write_stdin(bytes)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("2x2"));
+    let written = output.get_output().stdout.clone();
+    assert!(written.starts_with(b"\x89PNG"), "stdout is a PNG");
+}
+
+#[test]
 fn flags_do_not_mix_with_a_smasher_file() {
     let dir = tempfile::tempdir().expect("temp dir");
     let source = dir.path().join("logo.jpg");
@@ -514,6 +605,86 @@ fn flags_do_not_mix_with_a_smasher_file() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("smasher file lists the jobs"));
+}
+
+#[test]
+fn batch_writes_the_gallery_cuts() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("wide.png");
+    write_png_rgb(&source, 4, 2);
+    let out = dir.path().join("variants");
+    let jobs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/gallery.yaml");
+    smashbin()
+        .arg("batch")
+        .arg("--jobs")
+        .arg(&jobs)
+        .arg("--out")
+        .arg(&out)
+        .arg(&source)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("23 files in"))
+        .stderr(predicate::str::contains("icon_24x24.jpg  24x24  cover"));
+    let icon = std::fs::read(out.join("icon_24x24.jpg")).expect("icon");
+    let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(icon)).expect("jpeg");
+    assert_eq!(decoder.dimensions(), (24, 24));
+    let header = std::fs::read(out.join("header_415x160.jpg")).expect("header");
+    let decoder =
+        image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(header)).expect("jpeg");
+    assert_eq!(decoder.dimensions(), (415, 160));
+    let preview = std::fs::read(out.join("preview_820x860.jpg")).expect("preview");
+    let decoder =
+        image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(preview)).expect("jpeg");
+    assert_eq!(decoder.dimensions(), (820, 410));
+    assert!(out.join("srcset_2400.jpg").is_file(), "srcset file");
+}
+
+#[test]
+fn batch_verbose_prints_the_version_and_the_clock() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("wide.png");
+    write_png_rgb(&source, 4, 2);
+    let jobs = dir.path().join("two.yaml");
+    std::fs::write(
+        &jobs,
+        "jobs:\n  - name: icon.jpg\n    width: 2\n    height: 2\n    quality: 84\n    fit: cover\n  - name: wide.jpg\n    width: 4\n    height: 2\n    quality: 84\n    fit: contain\n",
+    )
+    .expect("jobs");
+    smashbin()
+        .arg("batch")
+        .arg("--verbose")
+        .arg("--jobs")
+        .arg(&jobs)
+        .arg("--out")
+        .arg(dir.path().join("out"))
+        .arg(&source)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("smashbin 0.1.6"))
+        .stderr(predicate::str::contains("library: smashbin-core 0.1.6"))
+        .stderr(predicate::str::contains("php module: later"))
+        .stderr(predicate::str::contains("smashgui: later"))
+        .stderr(predicate::str::contains("pixel cap: 100000000"))
+        .stderr(predicate::str::contains("decode:"))
+        .stderr(predicate::str::contains("encode:"))
+        .stderr(predicate::str::contains("2 files in"));
+}
+
+#[test]
+fn a_smasher_file_does_not_accept_batch_fields() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("wide.png");
+    write_png_rgb(&source, 4, 2);
+    std::fs::write(
+        dir.path().join("smasher.json"),
+        r#"{"jobs":[{"name":"a.jpg","width":2,"height":2,"quality":84,"fit":"cover"}]}"#,
+    )
+    .expect("smasher");
+    smashbin()
+        .arg(&source)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown field"));
 }
 
 fn write_png_rgb(path: &std::path::Path, width: u32, height: u32) {
@@ -573,14 +744,25 @@ fn embedded_hosts(bytes: &[u8]) -> Vec<String> {
     hosts
 }
 
-fn contains_ascii_ignore_case(bytes: &[u8], needle: &str) -> bool {
+/// A tracker name, not a piece of a longer word such as `Urequired`.
+fn contains_marker(bytes: &[u8], needle: &str) -> bool {
     let needle = needle.as_bytes();
-    bytes.windows(needle.len()).any(|window| {
-        window
-            .iter()
-            .zip(needle)
-            .all(|(byte, expected)| byte.eq_ignore_ascii_case(expected))
-    })
+    bytes
+        .windows(needle.len())
+        .enumerate()
+        .any(|(index, window)| {
+            let matched = window
+                .iter()
+                .zip(needle)
+                .all(|(byte, expected)| byte.eq_ignore_ascii_case(expected));
+            if !matched {
+                return false;
+            }
+            let before = index.checked_sub(1).map(|at| bytes[at]);
+            let after = bytes.get(index + needle.len()).copied();
+            !before.is_some_and(|byte| byte.is_ascii_alphanumeric())
+                && !after.is_some_and(|byte| byte.is_ascii_alphanumeric())
+        })
 }
 
 fn is_host_byte(byte: u8) -> bool {

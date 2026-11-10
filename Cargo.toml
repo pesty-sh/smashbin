@@ -1,58 +1,25 @@
-[package]
-name = "smashbin"
-version = "0.1.5"
+[workspace]
+resolver = "2"
+members = ["crates/smashbin-core", "crates/smashbin"]
+
+[workspace.package]
+version = "0.1.6"
 edition = "2021"
 rust-version = "1.88"
-description = "Offline image smasher. Strips metadata and resizes."
 authors = ["pesty-sh <pesty@pesty.sh>"]
 license = "MIT"
 repository = "https://github.com/pesty-sh/smashbin"
 homepage = "https://pesty.sh"
-readme = "README.md"
-keywords = ["jpeg", "png", "offline", "privacy", "image"]
-categories = ["command-line-utilities", "multimedia::images"]
 
-# These are compiled into the one binary. None of them is C, and none of
-# them is a second program the user has to install.
-#   clap          reads the flags
-#   img-parts     lifts metadata out of a JPEG, PNG, or GIF container
-#   png           recompresses a PNG. Pure Rust. Pixels stay the same.
-#   image         reads pixels and resizes them. JPEG and GIF go through it.
-#                 `--format` also writes the pure-Rust formats listed below.
-#                 WebP is lossless. AVIF and lossy WebP need a C library, so
-#                 they are not enabled.
-#   jpeg-encoder  writes those pixels into a new JPEG
-[dependencies]
-clap = { version = "4.6.7", default-features = false, features = [
-    "std",
-    "help",
-    "usage",
-    "error-context",
-    "derive",
-] }
-image = { version = "0.25.10", default-features = false, features = [
-    "bmp",
-    "ff",
-    "gif",
-    "hdr",
-    "ico",
-    "jpeg",
-    "png",
-    "pnm",
-    "qoi",
-    "tga",
-    "tiff",
-    "webp",
-] }
-img-parts = { version = "0.4.2", default-features = false }
-jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
-png = "0.18.1"
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
 
-[dev-dependencies]
-assert_cmd = "2.2.2"
-image = { version = "0.25.10", default-features = false, features = ["png"] }
-predicates = "3.1.4"
-tempfile = "3.27.0"
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
 
 [profile.release]
 opt-level = 3
@@ -60,13 +27,3 @@ lto = "thin"
 codegen-units = 1
 strip = true
 panic = "abort"
-
-[lints.rust]
-unsafe_code = "forbid"
-missing_docs = "warn"
-
-[lints.clippy]
-all = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-unwrap_used = "warn"
-expect_used = "warn"
