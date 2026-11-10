@@ -35,8 +35,11 @@ use image::codecs::jpeg::JpegDecoder;
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, RgbImage};
 
+use crate::cli::parse_ext_arg;
 use crate::config::{self, BatchJob, Fit};
+use crate::convert;
 use crate::error::SmashError;
+use crate::ext::Ext;
 use crate::lossy;
 use crate::read;
 use crate::resize;
@@ -86,20 +89,31 @@ pub(crate) fn run() -> Result<(), SmashError> {
     }
     let started = Instant::now();
     let jobs = config::load_batch(&args.jobs)?;
-    let cut = cut_file(&args.file, &jobs)?;
+    let cut = cut_file(&args.file, &jobs, args.format)?;
     let write_started = Instant::now();
     fs::create_dir_all(&args.out)?;
     for item in &cut.made {
         let path = args.out.join(&item.name);
         write::write_replacing(&path, &item.bytes)?;
-        eprintln!(
-            "{}  {}x{}  {}  quality={}",
-            item.name,
-            item.width,
-            item.height,
-            item.fit.as_str(),
-            item.quality
-        );
+        if item.format == Ext::Jpeg {
+            eprintln!(
+                "{}  {}x{}  {}  quality={}",
+                item.name,
+                item.width,
+                item.height,
+                item.fit.as_str(),
+                item.quality
+            );
+        } else {
+            eprintln!(
+                "{}  {}x{}  {}  {}",
+                item.name,
+                item.width,
+                item.height,
+                item.fit.as_str(),
+                item.format.as_str()
+            );
+        }
     }
     let write = write_started.elapsed();
     let total = started.elapsed();
@@ -127,10 +141,14 @@ fn print_support(args: &BatchArgs) {
     eprintln!("jobs: {}", args.jobs.display());
     eprintln!("image: {}", args.file.display());
     eprintln!("out: {}", args.out.display());
-    eprintln!("batch fields: name, width, height, quality, fit");
+    eprintln!("batch fields: name, width, height, quality, fit, format");
     eprintln!("fit: cover, contain");
     eprintln!("reads: PNG, JPEG, GIF");
-    eprintln!("writes: JPEG");
+    eprintln!("writes: {}", Ext::LIST);
+    match args.format {
+        Some(format) => eprintln!("format: {}", format.extension()),
+        None => eprintln!("format: the input"),
+    }
     eprintln!("pixel cap: {MAX_PIXELS}");
     eprintln!("byte cap: {}", read::MAX_BYTES);
     eprintln!("cpu: {cpu}");
@@ -157,20 +175,87 @@ fn print_bench(cut: &BatchCut, write: Duration) {
     eprintln!("output bytes: {output_bytes}");
 }
 
+/// Pick one container per cut.
+///
+/// A job `format` wins. Then `--format`. Otherwise the cut matches the input.
+/// The written name uses that container's suffix.
+fn settle_format(
+    mut jobs: Vec<BatchJob>,
+    flag: Option<Ext>,
+    kind: Kind,
+) -> Result<Vec<BatchJob>, SmashError> {
+    let mut seen = Vec::new();
+    for job in &mut jobs {
+        let format = job.format.or(flag).unwrap_or(ext_for_kind(kind));
+        if format == Ext::Ico && (job.width > 256 || job.height > 256) {
+            return Err(SmashError::message(format!(
+                "{} is {} by {}. An ICO holds at most 256 by 256.",
+                job.name, job.width, job.height
+            )));
+        }
+        job.format = Some(format);
+        job.name = named_for(&job.name, format);
+        if job.name.len() > 80 {
+            return Err(SmashError::message(format!(
+                "{} is longer than 80 characters",
+                job.name
+            )));
+        }
+        if seen.iter().any(|name: &String| name == &job.name) {
+            return Err(SmashError::message(format!(
+                "two jobs use the name {}",
+                job.name
+            )));
+        }
+        seen.push(job.name.clone());
+    }
+    Ok(jobs)
+}
+
+fn ext_for_kind(kind: Kind) -> Ext {
+    match kind {
+        Kind::Jpeg => Ext::Jpeg,
+        Kind::Png => Ext::Png,
+        Kind::Gif => Ext::Gif,
+    }
+}
+
+fn name_format(name: &str) -> Option<Ext> {
+    let extension = std::path::Path::new(name).extension()?.to_str()?;
+    Ext::parse(extension)
+}
+
+fn named_for(name: &str, format: Ext) -> String {
+    if name_format(name) == Some(format) {
+        return name.to_owned();
+    }
+    let stem = std::path::Path::new(name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(name);
+    format!("{stem}.{}", format.extension())
+}
+
 /// Decode `path` once and encode every job.
-fn cut_file(path: &Path, jobs: &[BatchJob]) -> Result<BatchCut, SmashError> {
+fn cut_file(path: &Path, jobs: &[BatchJob], flag: Option<Ext>) -> Result<BatchCut, SmashError> {
     let read_started = Instant::now();
     let input = read::load(Some(path))?;
     let read = read_started.elapsed();
-    let mut cut = cut_bytes(&input.bytes, jobs, true)?;
+    let mut cut = cut_bytes(&input.bytes, jobs, true, flag)?;
     cut.input_bytes = u64::try_from(input.bytes.len()).unwrap_or(u64::MAX);
     cut.read = read;
     Ok(cut)
 }
 
-fn cut_bytes(bytes: &[u8], jobs: &[BatchJob], parallel: bool) -> Result<BatchCut, SmashError> {
+fn cut_bytes(
+    bytes: &[u8],
+    jobs: &[BatchJob],
+    parallel: bool,
+    flag: Option<Ext>,
+) -> Result<BatchCut, SmashError> {
     let picture = sniff::sniff(bytes)?;
     sniff::pixel_budget(picture.width, picture.height)?;
+    let jobs = settle_format(jobs.to_vec(), flag, picture.kind)?;
     let decode_started = Instant::now();
     let (image, orientation) = decode_upright(bytes, picture.kind)?;
     let header_pixels = u64::from(picture.width).saturating_mul(u64::from(picture.height));
@@ -182,7 +267,7 @@ fn cut_bytes(bytes: &[u8], jobs: &[BatchJob], parallel: bool) -> Result<BatchCut
     }
     let decode = decode_started.elapsed();
     let encode_started = Instant::now();
-    let made = render_all(&image, jobs, parallel)?;
+    let made = render_all(&image, &jobs, parallel)?;
     let encode = encode_started.elapsed();
     Ok(BatchCut {
         made,
@@ -371,14 +456,193 @@ fn end_of_scan(bytes: &[u8], mut index: usize) -> Result<usize, SmashError> {
     Err(plain_jpeg())
 }
 
+fn picture_only(bytes: &[u8], format: Ext) -> Result<(), SmashError> {
+    match format {
+        Ext::Jpeg => pixels_only(bytes),
+        Ext::Png => png_picture(bytes),
+        Ext::Webp => webp_picture(bytes),
+        Ext::Gif => gif_picture(bytes),
+        Ext::Bmp => signed(bytes, b"BM", "BMP"),
+        Ext::Tiff => {
+            if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+                Ok(())
+            } else {
+                Err(plain_container("TIFF"))
+            }
+        }
+        Ext::Tga => {
+            if bytes.ends_with(b"TRUEVISION-XFILE.\0") {
+                Ok(())
+            } else {
+                Err(plain_container("TGA"))
+            }
+        }
+        Ext::Ico => {
+            if bytes.starts_with(&[0, 0, 1, 0]) {
+                Ok(())
+            } else {
+                Err(plain_container("ICO"))
+            }
+        }
+        Ext::Qoi => signed(bytes, b"qoif", "QOI"),
+        Ext::Ppm => signed(bytes, b"P6", "PPM"),
+        Ext::Hdr => signed(bytes, b"#?RADIANCE", "HDR"),
+        Ext::Farbfeld => signed(bytes, b"farbfeld", "FARBFELD"),
+    }
+}
+
+fn plain_container(name: &str) -> SmashError {
+    SmashError::message(format!("this cut is not a plain {name}"))
+}
+
+fn signed(bytes: &[u8], magic: &[u8], name: &str) -> Result<(), SmashError> {
+    if bytes.starts_with(magic) {
+        Ok(())
+    } else {
+        Err(plain_container(name))
+    }
+}
+
+fn user_metadata() -> SmashError {
+    SmashError::message("this cut still carries user metadata. Batch writes picture data only.")
+}
+
+fn png_picture(bytes: &[u8]) -> Result<(), SmashError> {
+    let png = img_parts::png::Png::from_bytes(img_parts::Bytes::copy_from_slice(bytes))
+        .map_err(|_| plain_container("PNG"))?;
+    for chunk in png.chunks() {
+        if !matches!(
+            &chunk.kind(),
+            b"IHDR" | b"PLTE" | b"IDAT" | b"IEND" | b"tRNS"
+        ) {
+            return Err(user_metadata());
+        }
+    }
+    Ok(())
+}
+
+fn webp_picture(bytes: &[u8]) -> Result<(), SmashError> {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
+        return Err(plain_container("WEBP"));
+    }
+    let mut index = 12;
+    let mut saw_image = false;
+    while index + 8 <= bytes.len() {
+        let kind = &bytes[index..index + 4];
+        let size = u32::from_le_bytes(bytes[index + 4..index + 8].try_into().unwrap_or([0; 4]));
+        let padded = usize::try_from(size)
+            .unwrap_or(usize::MAX)
+            .saturating_add(usize::from(size % 2 == 1));
+        let next = index.saturating_add(8).saturating_add(padded);
+        if next > bytes.len() {
+            return Err(plain_container("WEBP"));
+        }
+        if kind != b"VP8L" {
+            return Err(user_metadata());
+        }
+        if saw_image {
+            return Err(user_metadata());
+        }
+        saw_image = true;
+        index = next;
+    }
+    if saw_image && index == bytes.len() {
+        Ok(())
+    } else {
+        Err(plain_container("WEBP"))
+    }
+}
+
+fn gif_picture(bytes: &[u8]) -> Result<(), SmashError> {
+    if bytes.len() < 13 || !(bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) {
+        return Err(plain_container("GIF"));
+    }
+    let packed = bytes[10];
+    let global_colors = if packed & 0x80 == 0 {
+        0
+    } else {
+        3 * (1usize << ((packed & 0x07) + 1))
+    };
+    let mut index = 13 + global_colors;
+    let mut saw_trailer = false;
+    while index < bytes.len() {
+        match bytes[index] {
+            0x3B => {
+                saw_trailer = true;
+                index += 1;
+                break;
+            }
+            0x2C => index = skip_gif_image(bytes, index)?,
+            0x21 => {
+                let label = *bytes.get(index + 1).ok_or_else(|| plain_container("GIF"))?;
+                if label == 0xFE || (label == 0xFF && !netscape_block(bytes, index)) {
+                    return Err(user_metadata());
+                }
+                index = skip_gif_subblocks(bytes, index.saturating_add(2))?;
+            }
+            _ => return Err(plain_container("GIF")),
+        }
+    }
+    if saw_trailer && index == bytes.len() {
+        Ok(())
+    } else {
+        Err(plain_container("GIF"))
+    }
+}
+
+fn netscape_block(bytes: &[u8], index: usize) -> bool {
+    bytes
+        .get(index..index.saturating_add(19))
+        .is_some_and(|block| {
+            block
+                .windows(11)
+                .any(|window| window == b"NETSCAPE2.0" || window == b"ANIMEXTS1.0")
+        })
+}
+
+fn skip_gif_image(bytes: &[u8], start: usize) -> Result<usize, SmashError> {
+    let descriptor = bytes
+        .get(start..start + 10)
+        .ok_or_else(|| plain_container("GIF"))?;
+    let mut index = start + 10;
+    if descriptor[9] & 0x80 != 0 {
+        let colors = 3 * (1usize << ((descriptor[9] & 0x07) + 1));
+        index += colors;
+    }
+    index += 1;
+    skip_gif_subblocks(bytes, index)
+}
+
+fn skip_gif_subblocks(bytes: &[u8], mut index: usize) -> Result<usize, SmashError> {
+    while index < bytes.len() {
+        let size = usize::from(bytes[index]);
+        index += 1;
+        if size == 0 {
+            return Ok(index);
+        }
+        index = index
+            .checked_add(size)
+            .ok_or_else(|| plain_container("GIF"))?;
+        if index > bytes.len() {
+            return Err(plain_container("GIF"));
+        }
+    }
+    Err(plain_container("GIF"))
+}
+
 fn render_one(image: &RgbImage, job: &BatchJob) -> Result<Made, SmashError> {
     let fitted = match job.fit {
         Fit::Cover => resize::cover_rgb(image, job.width, job.height)?,
         Fit::Contain => resize::contain_rgb(image, job.width, job.height)?,
     };
     let (width, height) = fitted.dimensions();
-    let bytes = lossy::encode_rgb(&fitted, job.quality)?;
-    pixels_only(&bytes)?;
+    let format = job.format.unwrap_or(Ext::Jpeg);
+    let bytes = if format == Ext::Jpeg {
+        lossy::encode_rgb(&fitted, job.quality)?
+    } else {
+        convert::encode_still(&image::DynamicImage::ImageRgb8(fitted), format)?
+    };
+    picture_only(&bytes, format)?;
     Ok(Made {
         name: job.name.clone(),
         bytes,
@@ -386,6 +650,7 @@ fn render_one(image: &RgbImage, job: &BatchJob) -> Result<Made, SmashError> {
         height,
         fit: job.fit,
         quality: job.quality,
+        format,
     })
 }
 
@@ -418,8 +683,10 @@ pub(crate) struct Made {
     pub height: u32,
     /// The fit that produced this size.
     pub fit: Fit,
-    /// The quality that was encoded.
+    /// The quality that was encoded. JPEG only.
     pub quality: u8,
+    /// The container that was written.
+    pub format: Ext,
 }
 
 impl Fit {
@@ -437,7 +704,12 @@ impl Fit {
     about = "Decode one image and write every size in a job file.",
     after_help = "\
 The image is read once and decoded once. Each size is scaled from that
-picture, then the JPEGs are encoded across the CPU cores.
+picture, then the files are encoded across the CPU cores.
+
+--format / -f overrides the container for every cut that does not set
+format. With neither, the cut matches the input. A PNG stays a PNG, a
+JPEG stays a JPEG, and a GIF stays a GIF. JPEG uses quality. WebP is
+lossless.
 
 fit: cover fills the box and crops from the centre.
      contain keeps the whole picture inside the box and does not pad it.
@@ -456,6 +728,11 @@ struct BatchArgs {
 
     /// The image to cut.
     file: PathBuf,
+
+    /// Output container for every cut that does not set its own format.
+    /// The same words as the ordinary `--format`.
+    #[arg(short = 'f', long = "format", value_name = "FORMAT", value_parser = parse_ext_arg)]
+    format: Option<Ext>,
 
     /// Print the version, the picture, and the clock for each step.
     #[arg(long)]
@@ -478,9 +755,11 @@ fn parse_args() -> Result<BatchArgs, clap::Error> {
 mod tests {
     use image::ImageEncoder;
 
-    use super::{cut_bytes, pixels_only, DECODES};
+    use super::{cut_bytes, picture_only, pixels_only, settle_format, DECODES};
     use crate::config::{BatchJob, Fit};
+    use crate::ext::Ext;
     use crate::lossy;
+    use crate::sniff::Kind;
 
     #[test]
     fn one_decode_feeds_every_cut_and_threads_match() {
@@ -490,9 +769,9 @@ mod tests {
             job("wide.jpg", 4, 2, Fit::Contain),
         ];
         DECODES.with(|count| count.set(0));
-        let parallel = cut_bytes(&png, &jobs, true).unwrap();
+        let parallel = cut_bytes(&png, &jobs, true, None).unwrap();
         assert_eq!(DECODES.with(std::cell::Cell::get), 1);
-        let sequential = cut_bytes(&png, &jobs, false).unwrap();
+        let sequential = cut_bytes(&png, &jobs, false, None).unwrap();
         assert_eq!(DECODES.with(std::cell::Cell::get), 2);
         assert_eq!(parallel.made.len(), 2);
         assert_eq!(parallel.made[0].bytes, sequential.made[0].bytes);
@@ -510,7 +789,7 @@ mod tests {
         bytes[16..20].copy_from_slice(&50_000u32.to_be_bytes());
         bytes[20..24].copy_from_slice(&50_000u32.to_be_bytes());
         DECODES.with(|count| count.set(0));
-        let error = cut_bytes(&bytes, &[job("a.jpg", 8, 8, Fit::Cover)], true).unwrap_err();
+        let error = cut_bytes(&bytes, &[job("a.jpg", 8, 8, Fit::Cover)], true, None).unwrap_err();
         assert!(error.to_string().contains("stops at"));
         assert_eq!(DECODES.with(std::cell::Cell::get), 0);
     }
@@ -526,6 +805,7 @@ mod tests {
             &sideways,
             &[job("upright.jpg", 10, 10, Fit::Contain)],
             false,
+            None,
         )
         .unwrap();
         assert_eq!(made.orientation, "rotate 90");
@@ -551,8 +831,9 @@ mod tests {
         let inputs = [dirty_jpeg(), png_with_notes(), gif_with_comment()];
         for source in inputs {
             assert!(secrets.iter().any(|secret| contains(&source, secret)));
-            let made = cut_bytes(&source, &[job("clean.jpg", 8, 8, Fit::Cover)], false).unwrap();
-            pixels_only(&made.made[0].bytes).unwrap();
+            let made =
+                cut_bytes(&source, &[job("clean.jpg", 8, 8, Fit::Cover)], false, None).unwrap();
+            picture_only(&made.made[0].bytes, made.made[0].format).unwrap();
             for secret in secrets {
                 assert!(!contains(&made.made[0].bytes, secret));
             }
@@ -572,6 +853,44 @@ mod tests {
         assert!(pixels_only(&thumb).is_err());
     }
 
+    #[test]
+    fn a_webp_and_a_png_cut_are_picture_data() {
+        let mut webp = job("icon.webp", 8, 8, Fit::Cover);
+        webp.format = Some(Ext::Webp);
+        let mut png = job("tile.png", 8, 8, Fit::Cover);
+        png.format = Some(Ext::Png);
+        let made = cut_bytes(&png_bytes(4, 2), &[webp, png], false, None).unwrap();
+        assert_eq!(&made.made[0].bytes[..4], b"RIFF");
+        assert_eq!(&made.made[0].bytes[8..12], b"WEBP");
+        picture_only(&made.made[0].bytes, Ext::Webp).unwrap();
+        assert!(made.made[1].bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        picture_only(&made.made[1].bytes, Ext::Png).unwrap();
+    }
+
+    #[test]
+    fn the_format_flag_sets_the_suffix_and_the_name_can_too() {
+        let flagged = settle_format(
+            vec![job("icon_24x24.jpg", 24, 24, Fit::Cover)],
+            Some(Ext::Webp),
+            Kind::Png,
+        )
+        .unwrap();
+        assert_eq!(flagged[0].name, "icon_24x24.webp");
+        assert_eq!(flagged[0].format, Some(Ext::Webp));
+        let matched =
+            settle_format(vec![job("tile.png", 8, 8, Fit::Cover)], None, Kind::Jpeg).unwrap();
+        assert_eq!(matched[0].name, "tile.jpg");
+        assert_eq!(matched[0].format, Some(Ext::Jpeg));
+        let kept = settle_format(vec![job("tile.png", 8, 8, Fit::Cover)], None, Kind::Png).unwrap();
+        assert_eq!(kept[0].name, "tile.png");
+        assert_eq!(kept[0].format, Some(Ext::Png));
+        let mut job_format = job("icon.jpg", 8, 8, Fit::Cover);
+        job_format.format = Some(Ext::Webp);
+        let chosen = settle_format(vec![job_format], Some(Ext::Png), Kind::Jpeg).unwrap();
+        assert_eq!(chosen[0].name, "icon.webp");
+        assert_eq!(chosen[0].format, Some(Ext::Webp));
+    }
+
     fn job(name: &str, width: u32, height: u32, fit: Fit) -> BatchJob {
         BatchJob {
             name: name.to_owned(),
@@ -579,6 +898,7 @@ mod tests {
             height,
             quality: 84,
             fit,
+            format: None,
         }
     }
 

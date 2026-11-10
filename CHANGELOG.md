@@ -2,6 +2,11 @@
 
 smashbin is MIT licensed. The terms are in [LICENSE](LICENSE). Copyright (c) 2026 Stuart.
 
+## 0.1.7
+
+- `smashbin batch -f` / `--format` overrides the output container. A job's `format` wins over the flag. With neither, the cut matches the input: a PNG stays a PNG, a JPEG stays a JPEG, and a GIF stays a GIF.
+- JPEG uses `quality`. WebP is lossless. PNG, GIF, and WebP are checked as picture data before they are written.
+
 ## 0.1.6
 
 - `smashbin batch --jobs FILE --out DIR IMAGE` decodes the image once and writes every size. `fit` is `cover` or `contain`. The JPEGs are encoded in parallel. A `smasher.json` next to the image does not run this path.

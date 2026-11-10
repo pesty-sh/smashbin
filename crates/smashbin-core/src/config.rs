@@ -54,7 +54,8 @@ pub(crate) enum Fit {
     Contain,
 }
 
-/// One cut in a batch file. Every field is required.
+/// One cut in a batch file. `format` is optional. The command flag `--format`
+/// fills it in, and otherwise the file name's extension does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BatchJob {
     /// File name written inside `--out`. Not a path.
@@ -63,10 +64,12 @@ pub(crate) struct BatchJob {
     pub width: u32,
     /// Box height in pixels.
     pub height: u32,
-    /// JPEG quality, from 1 to 100.
+    /// JPEG quality, from 1 to 100. Other formats do not use it.
     pub quality: u8,
     /// `cover` or `contain`.
     pub fit: Fit,
+    /// Output container. The same words as `--format`.
+    pub format: Option<crate::ext::Ext>,
 }
 
 /// Read a `.json`, `.yaml`, or `.yml` smasher file.
@@ -204,6 +207,7 @@ fn one_batch_job(index: usize, value: Value) -> Result<BatchJob, String> {
     let mut height = None;
     let mut quality = None;
     let mut fit = None;
+    let mut format = None;
     let mut seen = Vec::new();
     for (key, value) in pairs {
         if seen.iter().any(|existing: &String| existing == &key) {
@@ -225,9 +229,15 @@ fn one_batch_job(index: usize, value: Value) -> Result<BatchJob, String> {
                 );
             }
             "fit" => fit = Some(fit_value(index, value)?),
+            "format" | "ext" => {
+                if format.is_some() {
+                    return Err(format!("job {} has a duplicate field `{key}`", index + 1));
+                }
+                format = Some(ext_value(index, value)?);
+            }
             other => {
                 return Err(format!(
-                    "job {n} has an unknown field `{other}`. A batch job uses name, width, height, quality, and fit.",
+                    "job {n} has an unknown field `{other}`. A batch job uses name, width, height, quality, fit, and format.",
                     n = index + 1
                 ));
             }
@@ -239,6 +249,7 @@ fn one_batch_job(index: usize, value: Value) -> Result<BatchJob, String> {
         height: height.ok_or_else(|| format!("job {} needs a height", index + 1))?,
         quality: quality.ok_or_else(|| format!("job {} needs a quality", index + 1))?,
         fit: fit.ok_or_else(|| format!("job {} needs a fit", index + 1))?,
+        format,
     };
     let pixels = u64::from(job.width).saturating_mul(u64::from(job.height));
     if pixels > MAX_CUT_PIXELS {
@@ -265,9 +276,9 @@ fn batch_name(index: usize, value: Value) -> Result<String, String> {
     Ok(name)
 }
 
-/// A single `name.jpg` in the output folder. No directories, devices, or extra suffixes.
+/// A single file name in the output folder. The extension is one `--format` accepts.
 fn safe_cut_name(name: &str) -> bool {
-    if !(5..=80).contains(&name.len()) || name.contains("..") {
+    if !(4..=80).contains(&name.len()) || name.contains("..") {
         return false;
     }
     let path = std::path::Path::new(name);
@@ -277,10 +288,10 @@ fn safe_cut_name(name: &str) -> bool {
     {
         return false;
     }
-    if path
-        .extension()
-        .is_none_or(|ext| !ext.eq_ignore_ascii_case("jpg"))
-    {
+    let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    if crate::ext::Ext::parse(extension).is_none() {
         return false;
     }
     let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
@@ -947,6 +958,17 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].fit, Fit::Cover);
         assert_eq!(jobs[0].quality, 84);
+        let webp = batch_jobs(parse_yaml(
+            "jobs:\n  - name: icon.webp\n    width: 24\n    height: 24\n    quality: 84\n    fit: cover\n    format: webp\n",
+        ).unwrap())
+        .unwrap();
+        assert_eq!(webp[0].format, Some(crate::ext::Ext::Webp));
+        let bad = batch_jobs(parse_json(
+            r#"{"jobs":[{"name":"icon.jpg","width":8,"height":8,"quality":84,"fit":"cover","format":"avif"}]}"#,
+        )
+        .unwrap())
+        .unwrap_err();
+        assert!(bad.contains("format is"));
         let missing = batch_jobs(parse_json(r#"{"jobs":[{"name":"a.jpg"}]}"#).unwrap());
         assert!(missing.unwrap_err().contains("needs a width"));
     }

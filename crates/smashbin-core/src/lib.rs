@@ -25,7 +25,7 @@
 //!
 //! [`smash_one`] calls those steps for one ordinary command.
 //! [`batch`] is the other entrance. It decodes once, then writes every size.
-//! Version 0.1.6 does not pad to a square.
+//! Version 0.1.7 does not pad to a square.
 
 mod batch;
 mod cli;

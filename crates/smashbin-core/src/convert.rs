@@ -44,6 +44,10 @@ pub fn apply(
     Ok((encoded, plain(resized)))
 }
 
+pub(crate) fn encode_still(image: &DynamicImage, ext: Ext) -> Result<Vec<u8>, SmashError> {
+    encode_image(image, ext)
+}
+
 fn encode_image(image: &DynamicImage, ext: Ext) -> Result<Vec<u8>, SmashError> {
     let mut cursor = Cursor::new(Vec::new());
     if ext == Ext::Hdr {

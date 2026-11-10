@@ -624,19 +624,17 @@ fn batch_writes_the_gallery_cuts() {
         .assert()
         .success()
         .stderr(predicate::str::contains("23 files in"))
-        .stderr(predicate::str::contains("icon_24x24.jpg  24x24  cover"));
-    let icon = std::fs::read(out.join("icon_24x24.jpg")).expect("icon");
-    let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(icon)).expect("jpeg");
+        .stderr(predicate::str::contains("icon_24x24.png  24x24  cover"));
+    let icon = std::fs::read(out.join("icon_24x24.png")).expect("icon");
+    let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(icon)).expect("png");
     assert_eq!(decoder.dimensions(), (24, 24));
-    let header = std::fs::read(out.join("header_415x160.jpg")).expect("header");
-    let decoder =
-        image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(header)).expect("jpeg");
+    let header = std::fs::read(out.join("header_415x160.png")).expect("header");
+    let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(header)).expect("png");
     assert_eq!(decoder.dimensions(), (415, 160));
-    let preview = std::fs::read(out.join("preview_820x860.jpg")).expect("preview");
-    let decoder =
-        image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(preview)).expect("jpeg");
+    let preview = std::fs::read(out.join("preview_820x860.png")).expect("preview");
+    let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(preview)).expect("png");
     assert_eq!(decoder.dimensions(), (820, 410));
-    assert!(out.join("srcset_2400.jpg").is_file(), "srcset file");
+    assert!(out.join("srcset_2400.png").is_file(), "srcset file");
 }
 
 #[test]
@@ -660,14 +658,47 @@ fn batch_verbose_prints_the_version_and_the_clock() {
         .arg(&source)
         .assert()
         .success()
-        .stderr(predicate::str::contains("smashbin 0.1.6"))
-        .stderr(predicate::str::contains("library: smashbin-core 0.1.6"))
+        .stderr(predicate::str::contains("smashbin 0.1.7"))
+        .stderr(predicate::str::contains("library: smashbin-core 0.1.7"))
         .stderr(predicate::str::contains("php module: later"))
         .stderr(predicate::str::contains("smashgui: later"))
         .stderr(predicate::str::contains("pixel cap: 100000000"))
         .stderr(predicate::str::contains("decode:"))
         .stderr(predicate::str::contains("encode:"))
         .stderr(predicate::str::contains("2 files in"));
+}
+
+#[test]
+fn batch_format_flag_writes_webp_and_a_job_can_choose_png() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = dir.path().join("wide.png");
+    write_png_rgb(&source, 4, 2);
+    let jobs = dir.path().join("cuts.yaml");
+    std::fs::write(
+        &jobs,
+        "jobs:\n  - name: icon.jpg\n    width: 4\n    height: 2\n    quality: 84\n    fit: cover\n  - name: tile.png\n    width: 4\n    height: 2\n    quality: 84\n    fit: contain\n    format: png\n",
+    )
+    .expect("jobs");
+    let out = dir.path().join("out");
+    smashbin()
+        .arg("batch")
+        .args(["--format", "webp"])
+        .arg("--jobs")
+        .arg(&jobs)
+        .arg("--out")
+        .arg(&out)
+        .arg(&source)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("icon.webp"))
+        .stderr(predicate::str::contains("WEBP"))
+        .stderr(predicate::str::contains("tile.png"))
+        .stderr(predicate::str::contains("PNG"));
+    let webp = std::fs::read(out.join("icon.webp")).expect("webp");
+    assert_eq!(&webp[..4], b"RIFF");
+    assert_eq!(&webp[8..12], b"WEBP");
+    let png = std::fs::read(out.join("tile.png")).expect("png");
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
 }
 
 #[test]

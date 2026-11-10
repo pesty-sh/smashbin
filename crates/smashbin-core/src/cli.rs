@@ -500,7 +500,7 @@ fn output_name(path: &Path, job: &ParsedJob) -> OsString {
     name
 }
 
-fn parse_ext_arg(text: &str) -> Result<Ext, String> {
+pub(crate) fn parse_ext_arg(text: &str) -> Result<Ext, String> {
     Ext::parse(text).ok_or_else(|| format!("--format is {}. `{text}` is none of those.", Ext::LIST))
 }
 

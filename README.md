@@ -2,7 +2,7 @@
 
 smashbin makes one image smaller on your own machine. It does not open a network connection. The result is one binary. The Rust libraries it uses are compiled into that file. There is no C code, no header to compile, and no second library to install beside it.
 
-Version 0.1.6 strips metadata, resizes when you pass a width or a height, and cuts one picture into every size in a batch file. A PHP module and a Tunes GUI are later. They are not in this version. The license is MIT. The text is `LICENSE`.
+Version 0.1.7 strips metadata, resizes when you pass a width or a height, and cuts one picture into every size in a batch file. A PHP module and a Tunes GUI are later. They are not in this version. The license is MIT. The text is `LICENSE`.
 
 The repository is a Cargo workspace. That is one project with two crates, and they share the `target/` folder.
 
@@ -119,9 +119,15 @@ jobs:
 
 `--verbose` prints the version, the library name, the pixel cap, the CPU count, and the clock split into read, decode, encode, and write. It also says the PHP module and the GUI are later. Those lines are the facts a later program can rely on. The last line is still `N files in` and the seconds.
 
+`-f` / `--format` is the same list as the ordinary command: jpg, png, gif, webp, bmp, tif, tga, ico, qoi, ppm, hdr, or ff. It overrides the container for every cut that does not set `format`. A job's `format` still wins over the flag. With neither, the cut matches the input. A PNG stays a PNG, a JPEG stays a JPEG, and a GIF stays a GIF. The file name's suffix changes to that container. JPEG uses `quality`. WebP is lossless. The other containers do not use `quality`.
+
+```bash
+./target/release/smashbin batch --format webp --jobs fixtures/gallery.yaml --out ./variants fixtures/logo.jpg
+```
+
 `fixtures/gallery.yaml` and `fixtures/gallery.json` are the same 23 cuts. Six icons and four headers use `fit: cover`, so the file is exactly that wide and that tall, cropped from the centre. Six previews and seven srcset sizes use `fit: contain`, so the whole picture stays inside the box. One side matches the box. The other side is equal or shorter. The file is not padded.
 
-stderr ends with the clock for the whole run: `23 files in` and the seconds. That number is the report. PHP and GD take 50–75 seconds for the template cuts on a 25 MB JPEG, inside a worker capped at 10% of one core and 2 MB/s of reads. The caps are written in [docs/bench.md](docs/bench.md). This command times all 23 files, templates plus srcset. Write the seconds down after you run your file. A phone JPEG is turned upright before the cuts, and the new files do not keep the orientation tag. Each cut is checked before it is written. The file may contain a plain JFIF header, the frame, the tables, and the scan. EXIF, XMP, a comment, a color profile, and any bytes after the end marker are refused. A file over 64 MB is refused while it is read. A side over 10 000 pixels, or a picture over 100 million pixels, is refused before decode. One cut is at most 8 million pixels, and one batch file holds at most 64 cuts. A cut name is one `name.jpg` in `--out`. A symlink at that name is replaced, and the link target is left alone.
+stderr ends with the clock for the whole run: `23 files in` and the seconds. That number is the report. PHP and GD take 50–75 seconds for the template cuts on a 25 MB JPEG, inside a worker capped at 10% of one core and 2 MB/s of reads. The caps are written in [docs/bench.md](docs/bench.md). This command times all 23 files, templates plus srcset. Write the seconds down after you run your file. A phone JPEG is turned upright before the cuts, and the new files do not keep the orientation tag. Each cut is checked before it is written. JPEG, PNG, GIF, and WebP must be picture data. EXIF, XMP, a comment, a color profile, and any bytes after a JPEG's end marker are refused. A file over 64 MB is refused while it is read. A side over 10 000 pixels, or a picture over 100 million pixels, is refused before decode. One cut is at most 8 million pixels, and one batch file holds at most 64 cuts. A cut name is one file name in `--out`. The suffix follows the container: the input format, `--format`, or the job's `format`. A symlink at that name is replaced, and the link target is left alone.
 
 PHP can call the same command with `proc_open` until an extension exists.
 
@@ -138,7 +144,7 @@ HOMEBREW_NO_AUTO_UPDATE=1 brew install pesty-sh/tap/smashbin
 smashbin --version
 ```
 
-The formula in the tap still installs the tagged `0.1.5` tarball. This checkout is 0.1.6. The tap stays on 0.1.5 until that formula is pointed at a new tag. The first install compiles with Homebrew's Rust and needs a network connection. `--HEAD` still builds the latest commit on `master`. `HOMEBREW_NO_AUTO_UPDATE=1` stops Homebrew from fetching every tap before this one formula.
+The formula in the tap still installs the tagged `0.1.5` tarball. This checkout is 0.1.7. The tap stays on 0.1.5 until that formula is pointed at a new tag. The first install compiles with Homebrew's Rust and needs a network connection. `--HEAD` still builds the latest commit on `master`. `HOMEBREW_NO_AUTO_UPDATE=1` stops Homebrew from fetching every tap before this one formula.
 
 ### apt
 
