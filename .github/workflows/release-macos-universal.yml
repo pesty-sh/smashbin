@@ -1,0 +1,101 @@
+# Optional universal Mac binary.
+#
+# Run this by hand AFTER both of these files are already on the same
+# GitHub Release:
+#   smashbin-vX.Y.Z-x86_64-apple-darwin.tar.gz
+#   smashbin-vX.Y.Z-aarch64-apple-darwin.tar.gz
+#
+# Those come from Release macOS Intel and Release Apple Silicon.
+# This file does not run on pull_request, so it is not a required check.
+# It does not run on a tag by itself: the two Mac builds may still be
+# queued when the tag's main release is created.
+#
+# lipo is a macOS tool. This job uses the Intel image so it does not
+# wait on the arm64 runner pool. An Intel Mac can still glue an arm64
+# slice into a universal file. There is no per-macOS-version build.
+# The result is one CLI binary, not an .app.
+
+name: Release macOS universal
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag that already has both Mac tarballs, for example v0.1.5"
+        required: true
+        type: string
+        # CHANGE ME: the example tag. You type the real tag when you click Run.
+        default: "v0.1.5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-universal-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  universal:
+    name: macOS universal optional
+    # CHANGE ME: Intel image. lipo does not need an Apple silicon runner.
+    runs-on: macos-15-intel
+    timeout-minutes: 360
+
+    steps:
+      # There is no actions/checkout here. This job only downloads two
+      # release files and glues them. gh normally learns the repository
+      # from the git checkout. Without a checkout it says
+      # "failed to run git: fatal: not a git repository".
+      # GH_REPO names the repository instead. CHANGE ME: you do not edit
+      # github.repository. GitHub fills that in. Change the two archive
+      # names below if you rename the Intel or Apple silicon tarballs.
+      - name: Download both Mac builds and lipo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          version="${TAG#v}"
+          intel="smashbin-v${version}-x86_64-apple-darwin.tar.gz"
+          silicon="smashbin-v${version}-aarch64-apple-darwin.tar.gz"
+          # Check the release first. A missing release should say so here,
+          # not as a confusing download error a few lines later.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "No GitHub Release named ${TAG}." >&2
+            echo "Run Release macOS Intel and Release Apple Silicon on master first." >&2
+            echo "They upload ${intel} and ${silicon} to release ${TAG}." >&2
+            echo "The older release tag without the v does not count." >&2
+            exit 1
+          fi
+          # Name the missing file. Both can be missing. Say each one.
+          assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          missing=0
+          if ! printf '%s\n' "$assets" | grep -qx "$intel"; then
+            echo "Missing ${intel} on release ${TAG}. Run Release macOS Intel first." >&2
+            missing=1
+          fi
+          if ! printf '%s\n' "$assets" | grep -qx "$silicon"; then
+            echo "Missing ${silicon} on release ${TAG}. Run Release Apple Silicon first." >&2
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          mkdir -p intel silicon dist/root
+          gh release download "$TAG" --pattern "$intel" --dir intel
+          gh release download "$TAG" --pattern "$silicon" --dir silicon
+          tar -xzf "intel/${intel}" -C intel
+          tar -xzf "silicon/${silicon}" -C silicon
+          # Two slices, one CLI binary. Not an .app.
+          lipo -create intel/smashbin silicon/smashbin -output dist/root/smashbin
+          lipo -info dist/root/smashbin | tee lipo-info.txt
+          grep -q x86_64 lipo-info.txt
+          grep -q arm64 lipo-info.txt
+          tar -czf dist/smashbin-universal-apple-darwin.tar.gz -C dist/root smashbin
+          (cd dist && shasum -a 256 smashbin-universal-apple-darwin.tar.gz > smashbin-universal-apple-darwin.tar.gz.sha256)
+          cat dist/smashbin-universal-apple-darwin.tar.gz.sha256
+          gh release upload "$TAG" \
+            dist/smashbin-universal-apple-darwin.tar.gz \
+            dist/smashbin-universal-apple-darwin.tar.gz.sha256 \
+            --clobber

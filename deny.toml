@@ -1,0 +1,43 @@
+# Licence and crate bans. CI runs `cargo deny check`.
+# Networking crates are also rejected by packaging/check-no-network.sh.
+
+[advisories]
+version = 2
+yanked = "warn"
+
+[licenses]
+version = 2
+# IJG is the Independent JPEG Group licence. jpeg-encoder is
+# "(MIT OR Apache-2.0) AND IJG". That crate writes the JPEG. It does not
+# open a socket.
+allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Zlib", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "IJG"]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+deny = [
+    { name = "reqwest" },
+    { name = "hyper" },
+    { name = "hyper-util" },
+    { name = "ureq" },
+    { name = "tokio" },
+    { name = "async-std" },
+    { name = "curl" },
+    { name = "curl-sys" },
+    { name = "native-tls" },
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "rustls" },
+    { name = "quinn" },
+    { name = "socket2" },
+    { name = "mio" },
+    { name = "cc" },
+    { name = "cmake" },
+    { name = "bindgen" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,115 @@
+# Optional native Intel macOS build.
+#
+# This workflow is NOT part of pull-request CI. It does not run on
+# pull_request, so it is not a check a PR must pass.
+# Do not add `pull_request:` here.
+#
+# It runs when you click Actions → Release macOS Intel → Run workflow,
+# or when you push a tag such as v0.1.5.
+#
+# On a tag, or a manual run on master, it uploads the Intel tarball and a
+# one-file checksum to the GitHub Release. If that release already exists,
+# this appends. It does not fail just because the release exists.
+# A manual run uses the tag v plus the version in Cargo.toml, for example
+# v0.1.5. The universal workflow downloads that exact name.
+#
+# cancel-in-progress is false, and the group name is not the main CI
+# group. A newer pull-request run cannot cancel this job with
+# "higher priority waiting request". That message is what cancelled the
+# Intel job while it was still queued when it shared the CI group.
+# A failure that says the runner had no capacity is not a code bug. Rerun it.
+#
+# Public repositories are not billed for these minutes.
+# `make` on the Mac still stamps the Intel binary macOS 10.12 and does not install.
+
+name: Release macOS Intel
+
+on:
+  # CHANGE ME: pull_request must stay off this file.
+  workflow_dispatch:
+  push:
+    tags:
+      # CHANGE ME: same pattern as release.yml. v0.1.5 matches. 0.1.5 does not.
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-intel-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-intel:
+    name: macOS Intel optional
+    # CHANGE ME: macos-15-intel is the last GitHub Intel image.
+    # It is not an Apple silicon runner.
+    runs-on: macos-15-intel
+    # CHANGE ME: 360 is the longest GitHub allows a job to run.
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # CHANGE ME: rust-toolchain.toml says `stable`. Pin this if you stop tracking stable.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: x86_64-apple-darwin
+          components: rustfmt, clippy
+
+      # This runner is Intel, so these tests really execute.
+      - name: Test
+        env:
+          # CHANGE ME: 10.12 is the Intel floor.
+          MACOSX_DEPLOYMENT_TARGET: "10.12"
+        run: cargo test --locked --target x86_64-apple-darwin
+
+      - name: Release binary
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.12"
+        run: |
+          set -eu
+          cargo build --release --locked --target x86_64-apple-darwin
+          ./packaging/check-macos-minos.sh target/x86_64-apple-darwin/release/smashbin 10.12
+
+      - name: Pack tarball and checksum
+        run: |
+          set -eu
+          mkdir -p dist
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          fi
+          name="smashbin-v${version}-x86_64-apple-darwin.tar.gz"
+          tar -czf "dist/${name}" -C target/x86_64-apple-darwin/release smashbin
+          (cd dist && shasum -a 256 "$name" > "${name}.sha256")
+          echo "version=${version}" >> "$GITHUB_ENV"
+          echo "archive=${name}" >> "$GITHUB_ENV"
+          cat "dist/${name}.sha256"
+
+      # A manual run on master uploads too. The universal workflow can only
+      # download a tarball that is already on the release. Leaving the file
+      # on the runner is why "Release macOS universal" exited 1 with
+      # "No GitHub Release named v0.1.5".
+      # CHANGE ME: refs/heads/master if the default branch has another name.
+      - name: Upload to the GitHub Release
+        if: github.ref_type == 'tag' || github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="v${version}"
+          fi
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "${GITHUB_SHA}" --title "smashbin ${tag}" --notes "Intel macOS native build. The main release notes are added by the Release workflow."
+          fi
+          gh release upload "$tag" \
+            "dist/${archive}" \
+            "dist/${archive}.sha256" \
+            --clobber
+          echo "Uploaded ${archive} to ${tag}"

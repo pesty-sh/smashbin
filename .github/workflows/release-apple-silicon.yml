@@ -1,0 +1,129 @@
+# Optional native Apple silicon build.
+#
+# This workflow is NOT part of pull-request CI. It does not run on
+# pull_request, so GitHub will not list it as a check that a PR must pass.
+# Do not add `pull_request:` here. That is what keeps it optional.
+#
+# It runs in two cases:
+#   1. You click Actions → Release Apple Silicon → Run workflow.
+#   2. You push a tag such as v0.1.5.
+#
+# On a tag, or a manual run on master, it uploads the native aarch64 tarball
+# and a one-file checksum onto the GitHub Release. If that release already
+# exists, this appends. It does not fail just because the release exists.
+# A manual run uses the tag v plus the version in Cargo.toml, for example
+# v0.1.5. The universal workflow downloads that exact name.
+#
+# The main CI concurrency group is separate. cancel-in-progress is false
+# so a later CI run cannot cancel this queue. GitHub's arm64 Mac runners
+# are often slow to start. Leave this job alone while it waits.
+# A failure that says the runner had no capacity is not a code bug. Rerun it.
+#
+# Public repositories are not billed for these minutes.
+
+name: Release Apple Silicon
+
+on:
+  # CHANGE ME: add another event only if you accept that it might become
+  # a required check. pull_request must stay off this file.
+  workflow_dispatch:
+  push:
+    tags:
+      # CHANGE ME: the same pattern as release.yml. v0.1.5 matches. 0.1.5 does not.
+      - "v*"
+
+# contents: write is what lets `gh release upload` attach a file.
+# A manual run on master uploads to v plus the Cargo.toml version.
+permissions:
+  contents: write
+
+# Own group. The main workflow uses `${{ github.workflow }}-${{ github.ref }}`.
+# A different group means the two workflows never cancel each other.
+# cancel-in-progress: false means a second click does not kill the one
+# already waiting for a runner.
+concurrency:
+  group: apple-silicon-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apple-silicon:
+    name: macOS Apple Silicon optional
+    # CHANGE ME: macos-latest is the current arm64 image.
+    runs-on: macos-latest
+    # CHANGE ME: 360 is the longest GitHub allows a job to run.
+    # The queue before a runner is free can be long. This limit is the
+    # job's own clock, so a build that finally starts still has time.
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml says `stable`. Cargo.toml rust-version is 1.88.
+      # CHANGE ME: if you pin a compiler, change this line too.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+          components: rustfmt, clippy
+
+      # This runner is Apple silicon, so the tests actually execute.
+      - name: Test
+        env:
+          # CHANGE ME: 11.0 is the oldest macOS an arm64 binary can load.
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: cargo test --locked --target aarch64-apple-darwin
+
+      - name: Release binary
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          set -eu
+          cargo build --release --locked --target aarch64-apple-darwin
+          ./packaging/check-macos-minos.sh target/aarch64-apple-darwin/release/smashbin 11.0
+
+      # On a tag, `gh release upload --clobber` replaces a file of the same
+      # name. It does not delete the Linux or Windows assets.
+      - name: Pack tarball and checksum
+        run: |
+          set -eu
+          mkdir -p dist
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          fi
+          name="smashbin-v${version}-aarch64-apple-darwin.tar.gz"
+          tar -czf "dist/${name}" -C target/aarch64-apple-darwin/release smashbin
+          # One checksum line, same format as SHA256SUMS (`sha256sum -c` can read it).
+          # A separate file so we do not overwrite the main release's SHA256SUMS.
+          (cd dist && shasum -a 256 "$name" > "${name}.sha256")
+          echo "version=${version}" >> "$GITHUB_ENV"
+          echo "archive=${name}" >> "$GITHUB_ENV"
+          cat "dist/${name}.sha256"
+
+      # A manual run on master uploads too. The universal workflow can only
+      # download a tarball that is already on the release.
+      # CHANGE ME: refs/heads/master if the default branch has another name.
+      - name: Upload to the GitHub Release
+        if: github.ref_type == 'tag' || github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="v${version}"
+          fi
+          # Create only when the main Release workflow has not done it yet.
+          # `gh release view` exits non-zero when the release is missing.
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "${GITHUB_SHA}" --title "smashbin ${tag}" --notes "Apple silicon native build. The main release notes are added by the Release workflow."
+          fi
+          # --clobber replaces a file of the same name. It does not delete
+          # the other assets (Linux debs, Intel tarball, universal binary).
+          gh release upload "$tag" \
+            "dist/${archive}" \
+            "dist/${archive}.sha256" \
+            --clobber
+          echo "Uploaded ${archive} to ${tag}"

@@ -776,8 +776,15 @@ fn embedded_hosts(bytes: &[u8]) -> Vec<String> {
 }
 
 /// A tracker name, not a piece of a longer word such as `Urequired`.
+///
+/// A letter or digit on either side does not count. Rust packs the next
+/// string straight after `InvalidSignature`, and those bytes contain `ureq`.
+/// That is the word "signature", not the ureq crate.
 fn contains_marker(bytes: &[u8], needle: &str) -> bool {
     let needle = needle.as_bytes();
+    if needle.is_empty() || needle.len() > bytes.len() {
+        return false;
+    }
     bytes
         .windows(needle.len())
         .enumerate()
@@ -828,11 +835,48 @@ fn assert_no_network_libraries(bin: &std::path::Path) {
 }
 
 fn run_with_network_denied(bin: &std::path::Path, args: &[&str]) -> std::process::Output {
-    let mut command = std::process::Command::new("sandbox-exec");
-    command.args(["-p", "(version 1)\n(allow default)\n(deny network*)\n"]);
-    command.arg(bin);
-    command
+    // A fresh network namespace has no routes, so a connect would fail.
+    // The program should still write the image.
+    //
+    // macOS uses sandbox-exec. A desktop Linux can use `unshare` with a
+    // user namespace. GitHub's Ubuntu runners reject the write to uid_map,
+    // so there the same namespace is opened with passwordless sudo.
+    // Windows has neither tool. The string and library checks above are
+    // what that runner can prove, and the program is still run so a crash
+    // fails the test.
+    if cfg!(target_os = "macos") {
+        return std::process::Command::new("sandbox-exec")
+            .args(["-p", "(version 1)\n(allow default)\n(deny network*)\n"])
+            .arg(bin)
+            .args(args)
+            .output()
+            .expect("run smashbin with network denied");
+    }
+
+    if cfg!(target_os = "linux") {
+        let user_namespace = std::process::Command::new("unshare")
+            .args(["--net", "--map-root-user"])
+            .arg(bin)
+            .args(args)
+            .output();
+        if let Ok(output) = user_namespace {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let namespace_blocked =
+                stderr.contains("uid_map") || stderr.contains("Operation not permitted");
+            if !namespace_blocked {
+                return output;
+            }
+        }
+        return std::process::Command::new("sudo")
+            .args(["-n", "unshare", "--net", "--"])
+            .arg(bin)
+            .args(args)
+            .output()
+            .expect("run smashbin with network denied");
+    }
+
+    std::process::Command::new(bin)
         .args(args)
         .output()
-        .expect("run smashbin with network denied")
+        .expect("run smashbin")
 }

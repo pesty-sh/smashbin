@@ -1,0 +1,15 @@
+# Cross musl builds for the GitHub Release.
+# x86_64 and aarch64 musl link on their own runners.
+# armv7 and i686 are built on an x86_64 Linux runner, whose `ld` cannot read
+# those objects. Use the lld that ships with rustc. See packaging/rust-lld.sh.
+#
+# The Mac host build and `make deb` (glibc 2.27 via Zig) are not listed here,
+# so this file does not change them.
+
+[target.armv7-unknown-linux-musleabihf]
+linker = "packaging/rust-lld.sh"
+rustflags = ["-C", "linker-flavor=ld.lld"]
+
+[target.i686-unknown-linux-musl]
+linker = "packaging/rust-lld.sh"
+rustflags = ["-C", "linker-flavor=ld.lld"]

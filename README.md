@@ -171,6 +171,8 @@ smashbin --version
 
 `stable` is the channel. `main` is the section. Later upgrades are `sudo apt-get update` then `sudo apt-get install smashbin`.
 
+A tagged GitHub Release is built by the workflows in `.github/workflows/`. The steps are in `docs/RELEASING.md`. The Windows zip is not signed, so Windows SmartScreen warns the first time you open `smashbin.exe`. winget and Scoop are later.
+
 There is no update checker in the program. It will not grow one.
 
 ## Build
